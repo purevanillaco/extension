@@ -93,7 +93,6 @@ async function initializeConfig(background, version) {
     dbLogs.onerror = (event) => dbError(event, true)
     function dbError(event, logs) {
         if (background) {
-            sendNotification(chrome.i18n.getMessage('errordbTitle', event.target.source.name), event.target.error.message, 'error', 'openSettings')
             if (logs) {
                 console._error(chrome.i18n.getMessage('errordb', [event.target.source.name, event.target.error.message]))
             } else {

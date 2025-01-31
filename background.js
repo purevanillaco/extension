@@ -1369,64 +1369,9 @@ async function endVote(request, sender, project) {
     }
 }
 
-//Отправитель уведомлений
 function sendNotification(title, message, type, notificationId) {
-    if (!message) message = ''
-    if (!notificationId) notificationId = ''
-
-    if (settings?.disabledNotifStart && type === 'start') return
-    if (settings?.disabledNotifInfo && type === 'info') return
-
-    if (type === 'warn' || type === 'error') {
-        (async () => {
-            try {
-                await chrome.runtime.sendMessage({ notification: { title, message, type, notificationId } })
-            } catch (error) {
-                if (!error.message.includes('Could not establish connection. Receiving end does not exist') && !error.message.includes('The message port closed before a response was received')) {
-                    console.warn(error.message)
-                }
-            }
-        })()
-    }
-
-    if (settings?.disabledNotifWarn && type === 'warn') return
-    if (settings?.disabledNotifError && type === 'error') return
-
-    let notification = {
-        type: 'basic',
-        iconUrl: 'images/icon128.png',
-        title: title,
-        message: message
-    }
-    chrome.notifications.create(notificationId, notification, function () { })
+    // deprecated
 }
-chrome.notifications.onClicked.addListener(async function (notificationId) {
-    if (notificationId.startsWith('openTab_')) {
-        try {
-            const tabId = Number(notificationId.replace('openTab_', ''))
-            if (!tabId) return
-            const tab = await chrome.tabs.update(tabId, { active: true })
-            if (!tab) return
-            await chrome.windows.update(tab.windowId, { focused: true })
-        } catch (error) {
-            if (!error.message.includes('No tab with id')) {
-                console.warn('Ошибка при фокусировке на вкладку', error.message)
-            }
-        }
-    } else if (notificationId.startsWith('openProject_')) {
-        try {
-            const projectKey = Number(notificationId.replace('openProject_', ''))
-            const found = await db.count('projects', projectKey)
-            if (!found) return
-            await openOptionsPage()
-            await chrome.runtime.sendMessage({ openProject: projectKey })
-        } catch (error) {
-            console.warn('Ошибка открытия настроек с определённым проектом', error.message)
-        }
-    } else if (notificationId.startsWith('openSettings')) {
-        await chrome.runtime.openOptionsPage()
-    }
-})
 
 async function openOptionsPage() {
 }
