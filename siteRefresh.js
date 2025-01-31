@@ -1,7 +1,7 @@
 refreshSites()
 async function refreshSites() {
     console.log('refreshSites')
-    let next = 3600 * 1000
+    let next = 3600 * 1000 * 2
     try {
         const req = await fetch('https://api.beta.serverbench.io/community/hn2qqSZ30ebQWWd_7uso9/listing/display', {
             headers: {
@@ -22,6 +22,12 @@ async function refreshSites() {
                 siteDisplay.next ? new Date(siteDisplay.next) : null,
                 data.member.name
             )
+        }
+        if(siteDisplay.primaryNext){
+            const nextVote = new Date(siteDisplay.primaryNext).getTime() - Date.now()
+            if(nextVote > 0){
+                next = nextVote
+            }
         }
     } catch (error) {
         next = 60 * 5 * 1000

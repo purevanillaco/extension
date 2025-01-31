@@ -178,13 +178,7 @@ async function checkOpen(project, transaction) {
     if (project.randomize) opened.randomize = project.randomize
 
     if (!settings.disabledRestartOnTimeout) {
-        let retryCoolDown
-        if (project.randomize) {
-            retryCoolDown = Math.floor(Math.random() * 600000 + 1800000)
-        } else {
-            if (!settings.timeoutVote) settings.timeoutVote = 900000
-            retryCoolDown = settings.timeoutVote
-        }
+        let retryCoolDown = 3600 * 1000 * 2
         opened.nextAttempt = Date.now() + retryCoolDown
     }
 
@@ -1329,22 +1323,10 @@ async function endVote(request, sender, project) {
         if (request.incorrectDomain) {
             message += ' Incorrect domain ' + request.incorrectDomain
         }
-        let retryCoolDown
-        if (request.retryCoolDown) {
-            retryCoolDown = request.retryCoolDown
-        } else if ((request.errorVote && request.errorVote[0] === '404') || (request.message && project.rating === 'wargm.ru' && project.randomize)) {
-            retryCoolDown = 21600000
-        } else if (request.closedTab) {
-            retryCoolDown = 60000
-        } else {
-            retryCoolDown = settings.timeoutError
-        }
+        let retryCoolDown = 3600 * 1000 * 2
 
         sendMessage = message + '. ' + chrome.i18n.getMessage('errorNextVote', (Math.round(retryCoolDown / 1000 / 60 * 100) / 100).toString())
 
-        if (project.randomize) {
-            retryCoolDown = retryCoolDown + Math.floor(Math.random() * 900000)
-        }
         project.time = Date.now() + retryCoolDown
         project.error = message
         console.error(getProjectPrefix(project, true), sendMessage + ', ' + chrome.i18n.getMessage('timeStamp') + ' ' + project.time)
