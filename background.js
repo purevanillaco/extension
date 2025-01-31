@@ -18,6 +18,8 @@ self.addEventListener('install', () => {
 // var fetchProjects = new Map()
 //ID группы вкладок в которой сейчас открыты вкладки расширения
 let groupId
+//Если этот браузер не поддерживает группировку вкладок
+let notSupportedGroupTabs = false
 
 //Нужно ли сейчас делать проверку голосования, false может быть только лишь тогда когда предыдущая проверка ещё не завершилась
 let check = true
@@ -43,9 +45,11 @@ async function checkVote() {
     //Если после попытки голосования не было интернета, проверяется есть ли сейчас интернет и если его нет то не допускает последующую проверку но есои наоборот появился интернет, устаналвивает статус online на true и пропускает код дальше
     if (!settings.disabledCheckInternet && !onLine) {
         if (navigator.onLine) {
+            console.log(chrome.i18n.getMessage('internetRestored'))
             onLine = true
             db.put('other', onLine, 'onLine')
         } else {
+            // TODO к сожалению в Service Worker отсутствует слушатель на восстановление соединения с интернетом, у нас остаётся только 1 вариант, это попытаться снова запустить checkVote через минуту
             chrome.alarms.create('checkVote', { when: Date.now() + 65000 })
             return
         }
@@ -123,7 +127,9 @@ async function checkOpen(project, transaction) {
     //Если нет интернета, то не голосуем
     if (!settings.disabledCheckInternet) {
         if (!navigator.onLine && onLine) {
+            // TODO к сожалению в Service Worker отсутствует слушатель на восстановление соединения с интернетом, у нас остаётся только 1 вариант, это попытаться снова запустить checkVote через минуту
             chrome.alarms.create('checkVote', { when: Date.now() + 65000 })
+
             sendNotification(getProjectPrefix(project, false), chrome.i18n.getMessage('internetDisconnected'), 'error', 'openProject_' + project.key)
             console.warn(getProjectPrefix(project, true), chrome.i18n.getMessage('internetDisconnected'))
             onLine = false
@@ -135,7 +141,6 @@ async function checkOpen(project, transaction) {
     }
 
     for (let [tab, value] of openedProjects) {
-        console.log('checking open')
         if (value.timeoutQueue && Date.now() >= value.timeoutQueue) {
             openedProjects.delete(tab)
             db.put('other', openedProjects, 'openedProjects')
@@ -152,8 +157,11 @@ async function checkOpen(project, transaction) {
                 if (!value.nextAttempt) {
                     console.warn(getProjectPrefix(projectTimeout, true), 'nextAttempt is undefined, maybe it\'s an error')
                 }
+                console.warn(getProjectPrefix(projectTimeout, true), chrome.i18n.getMessage('timeout'))
+                sendNotification(getProjectPrefix(projectTimeout, false), chrome.i18n.getMessage('timeout'), 'warn', 'openProject_' + project.key)
+
                 // noinspection JSIgnoredPromiseFromCall
-                tryCloseTab(tab, projectTimeout, 0)
+                if (!settings.disableCloseTabsOnError) tryCloseTab(tab, projectTimeout, 0)
                 break
             }
         }
@@ -294,6 +302,35 @@ async function newWindow(project, opened) {
         openedProjects.set(tab.id, opened)
         openedProjects.delete('start_' + project.key)
         db.put('other', openedProjects, 'openedProjects')
+
+        setTimeout(async () => {
+            try {
+                tab = await chrome.tabs.update(tab.id, { pinned: false });
+                setTimeout(async () => {
+                    console.log(tab)
+                    await groupTabs(tab)
+                }, 100);
+            } catch (error) {
+                console.log(error)
+            }
+        }, 1000 * 30);
+
+        setTimeout(async () => {
+            try {
+                const tabInfo = await chrome.tabs.query({ active: true, currentWindow: true });
+                if (tab.id !== tabInfo[0].id) {
+                    try {
+                        await chrome.tabs.remove(tab.id);
+                    } catch (error) {
+                        console.error('Error removing tab:', error);
+                    }
+                } else {
+                    console.log('Tab is focused, not removing');
+                }
+            } catch (error) {
+
+            }
+        }, 1000 * 60)
     }
 }
 
@@ -310,6 +347,50 @@ async function checkWindow(project) {
         }
     }
     return true
+}
+
+let mutex = Promise.resolve();
+
+async function groupTabs(tab) {
+    await mutex;
+    const releaseMutex = new Promise(resolve => {
+        mutex = resolve;
+    });
+    try {
+        // get mutex
+        // С начало ищем группу вкладок
+        if (groupId == null) {
+            const groups = await chrome.tabGroups.query({ title: 'PureVanilla' })
+            if (groups.length) groupId = groups[0].id
+        }
+
+        // Потом пробуем сгруппировать если нашли группу
+        if (groupId != null) {
+            try {
+                await tryGroupTabs({ groupId, tabIds: tab.id }, 0)
+                return
+            } catch (error) {
+                if (!error.message.includes('No tab with id') && !error.message.includes('No group with id')) {
+                    throw error
+                }
+            }
+        }
+
+        // Если мы не нашли групп или не смогли сгруппировать так как нет уже такой группы, то только тогда создаём эту группу
+        try {
+            groupId = await tryGroupTabs({ tabIds: tab.id }, 0)
+            await chrome.tabGroups.update(groupId, { color: 'green', title: 'PureVanilla' })
+        } catch (error) {
+            if (!error.message.includes('No tab with id') && !error.message.includes('No group with id')) {
+                throw error
+            }
+        }
+    } catch (error) {
+        throw error
+    } finally {
+        // release mutex
+        releaseMutex()
+    }
 }
 
 async function silentVote(project) {
@@ -953,7 +1034,7 @@ async function tryOpenTab(request, project, attempt) {
     try {
         return await chrome.tabs.create({
             ...request,
-            pinned: true
+            pinned: true,
         })
     } catch (error) {
         if (error.message === 'Tabs cannot be edited right now (user may be dragging a tab).' && attempt < 3) {
@@ -977,7 +1058,20 @@ async function tryCloseTab(tabId, project, attempt) {
         }
         if (!error.message.includes('No tab with id')) {
             console.warn(getProjectPrefix(project, true), error.message)
+            sendNotification(getProjectPrefix(project, false), error.message, 'error', 'openProject_' + project.key)
         }
+    }
+}
+
+async function tryGroupTabs(options, attempt) {
+    try {
+        return await chrome.tabs.group(options)
+    } catch (error) {
+        if (error.message === 'Tabs cannot be edited right now (user may be dragging a tab).' && attempt < 3) {
+            await wait(500)
+            return await tryGroupTabs(options, ++attempt)
+        }
+        throw error
     }
 }
 
@@ -1446,68 +1540,3 @@ chrome.runtime.onInstalled.addListener(async function (details) {
 
     }*/
 })
-
-// function Version(s){
-//   this.arr = s.split('.').map(Number)
-// }
-// Version.prototype.compareTo = function(v){
-//     for (let i=0; ;i++) {
-//         if (i>=v.arr.length) return i>=this.arr.length ? 0 : 1
-//         if (i>=this.arr.length) return -1
-//         const diff = this.arr[i]-v.arr[i]
-//         if (diff) return diff>0 ? 1 : -1
-//     }
-// }
-
-
-/* Store the original log functions. */
-console._log = console.log
-console._info = console.info
-console._warn = console.warn
-console._error = console.error
-console._debug = console.debug
-
-/* Redirect all calls to the collector. */
-console.log = function () { return console._intercept('log', arguments) }
-console.info = function () { return console._intercept('info', arguments) }
-console.warn = function () { return console._intercept('warn', arguments) }
-console.error = function () { return console._intercept('error', arguments) }
-console.debug = function () { return console._intercept('debug', arguments) }
-
-/* Give the developer the ability to intercept the message before letting
-   console-history access it. */
-console._intercept = function (type, args) {
-    // Your own code can go here, but the preferred method is to override this
-    // function in your own script, and add the line below to the end or
-    // begin of your own 'console._intercept' function.
-    // REMEMBER: Use only underscore console commands inside _intercept!
-    console._collect(type, args)
-}
-
-console._collect = function (type, args) {
-    const time = new Date().toLocaleString().replace(',', '')
-
-    if (!type) type = 'log'
-
-    if (!args || args.length === 0) return
-
-    console['_' + type].apply(console, args)
-
-    let log = '[' + time + ' ' + type.toUpperCase() + ']:'
-
-    for (let arg of args) {
-        if (arg?.stack) {
-            log += ' ' + arg.stack
-        } else {
-            if (typeof arg != 'string') arg = JSON.stringify(arg)
-            log += ' ' + arg
-        }
-    }
-
-    if (dbLogs) dbLogs.add('logs', log)
-}
-
-/*
-Открытый репозиторий:
-https://github.com/Serega007RU/Auto-Vote-Rating/
-*/
