@@ -1,8 +1,13 @@
-refreshSites()
-async function refreshSites() {
+async function refreshSites(callback) {
     console.log('refreshSites')
     let next = 3600 * 1000 * 2
     try {
+        let cursor = await db.transaction('projects', 'readwrite').store.index('rating').openCursor()
+        while (cursor) {
+            await cursor.delete()
+            chrome.alarms.clear(String(cursor.primaryKey))
+            cursor = await cursor.continue()
+        }
         const req = await fetch('https://api.beta.serverbench.io/community/hn2qqSZ30ebQWWd_7uso9/listing/display', {
             headers: {
                 'Content-Type': 'application/json',
@@ -15,7 +20,7 @@ async function refreshSites() {
         })
         const data = await req.json()
         for (const siteDisplay of data.sites) {
-            if(siteDisplay.secondary) return
+            if (siteDisplay.secondary) continue;
             await buildProject(
                 siteDisplay.site.url,
                 siteDisplay.last ? new Date(siteDisplay.last) : null,
@@ -23,15 +28,16 @@ async function refreshSites() {
                 data.member.name
             )
         }
-        if(siteDisplay.primaryNext){
-            const nextVote = new Date(siteDisplay.primaryNext).getTime() - Date.now()
-            if(nextVote > 0 && nextVote < next){
+        if (data.primaryNext) {
+            const nextVote = new Date(data.primaryNext).getTime() - Date.now()
+            if (nextVote > 0 && nextVote < next) {
                 next = nextVote
             }
         }
+        await callback()
     } catch (error) {
-        next = 60 * 5 * 1000
         console.error(error)
+        next = 1000 * 60 * 5
     }
     setTimeout(refreshSites, next)
 }
@@ -71,7 +77,6 @@ async function buildProject(url, lastVote, nextVote, username) {
             return
         }
     } catch (error) {
-        console.error(error)
         return
     }
 
@@ -99,7 +104,6 @@ async function buildProject(url, lastVote, nextVote, username) {
 async function addProject(project, element) {
     let found = await db.countFromIndex('projects', 'rating, id', [project.rating, project.id])
     if (found > 0) {
-        // already added
         return
     }
 
@@ -109,21 +113,10 @@ async function addProject(project, element) {
 
 async function addProjectList(project, preBend) {
     if (!project.key) {
-        if (project.priority) {
-            preBend = true
-            const store = db.transaction('projects', 'readwrite').store
-            const cursor = await store.openCursor()
-            if (!cursor || cursor.key === 1) {
-                project.key = -1
-            } else {
-                project.key = cursor.key - 1
-            }
-            await store.put(project, project.key)
-        } else {
-            const store = db.transaction('projects', 'readwrite').store
-            project.key = await store.put(project)
-            await store.put(project, project.key)
-        }
+        const store = await db.transaction('projects', 'readwrite').store
+        project.key = await store.put(project)
+        await store.put(project, project.key)
+
         if (project.time != null && project.time > Date.now()) {
             let create = true
             const alarms = await chrome.alarms.getAll()
@@ -135,10 +128,8 @@ async function addProjectList(project, preBend) {
                 }
             }
             if (create) {
-                chrome.alarms.create(String(project.key), { when: project.time })
+                await chrome.alarms.create(String(project.key), { when: project.time })
             }
-        } else {
-            chrome.runtime.sendMessage('checkVote')
         }
     }
 }

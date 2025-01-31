@@ -34,6 +34,7 @@ initializeFunc.finally(() => initializeFunc.done = true)
 
 //Проверка: нужно ли голосовать, сверяет время текущее с временем из конфига
 async function checkVote() {
+    console.log('checkvote')
 
     await initializeFunc
 
@@ -167,6 +168,7 @@ async function checkOpen(project, transaction) {
         }
     }
 
+    console.log('cleared next attempt 2')
     delete project.timeoutQueue
     delete project.nextAttempt
     delete project.countInject
@@ -215,6 +217,8 @@ async function checkOpen(project, transaction) {
 let promiseGroup
 let promiseWindow
 //Открывает вкладку для голосования или начинает выполнять fetch запросы
+
+
 async function newWindow(project, opened) {
     //Ожидаем очистку куки
     let result = await Promise.all(promises)
@@ -299,11 +303,7 @@ async function newWindow(project, opened) {
 
         setTimeout(async () => {
             try {
-                tab = await chrome.tabs.update(tab.id, { pinned: false });
-                setTimeout(async () => {
-                    console.log(tab)
-                    await groupTabs(tab)
-                }, 100);
+                groupTabs(tab)
             } catch (error) {
                 console.log(error)
             }
@@ -316,7 +316,7 @@ async function newWindow(project, opened) {
                     try {
                         await chrome.tabs.remove(tab.id);
                     } catch (error) {
-                        console.error('Error removing tab:', error);
+
                     }
                 } else {
                     console.log('Tab is focused, not removing');
@@ -325,6 +325,59 @@ async function newWindow(project, opened) {
 
             }
         }, 1000 * 60)
+    }
+}
+
+let managingGroup = false;
+async function groupTabs(tab) {
+    // Unpin and move tab to the end
+    tab = await chrome.tabs.update(tab.id, { pinned: false });
+    const tabs = await chrome.tabs.query({ currentWindow: true });
+    await chrome.tabs.move(tab.id, { index: tabs.length });
+
+    // Synchronized group management
+    while (managingGroup) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    try {
+        managingGroup = true;
+
+        const groups = await chrome.tabGroups.query({ title: 'Manual Voting' });
+        let groupId = groups[0]?.id;
+
+        // Remove extra groups if they exist
+        if (groups.length > 1) {
+            for (let i = 1; i < groups.length; i++) {
+                try {
+                    await chrome.tabs.ungroup(groups[i].tabs);
+                } catch { }
+            }
+        }
+
+        // Create group if no group exists
+        if (!groupId) {
+            groupId = await chrome.tabs.group({ tabIds: tab.id });
+            await chrome.tabGroups.update(groupId, { color: 'green', title: 'Manual Voting' });
+        }
+
+        // Add tab to group with retry
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                await chrome.tabs.group({ groupId, tabIds: tab.id });
+                return;
+            } catch (error) {
+                if (
+                    error.message !== 'Tabs cannot be edited right now (user may be dragging a tab).' ||
+                    attempt === 2
+                ) {
+                    throw error;
+                }
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        }
+    } finally {
+        managingGroup = false;
     }
 }
 
@@ -341,50 +394,6 @@ async function checkWindow(project) {
         }
     }
     return true
-}
-
-let mutex = Promise.resolve();
-
-async function groupTabs(tab) {
-    await mutex;
-    const releaseMutex = new Promise(resolve => {
-        mutex = resolve;
-    });
-    try {
-        // get mutex
-        // С начало ищем группу вкладок
-        if (groupId == null) {
-            const groups = await chrome.tabGroups.query({ title: 'PureVanilla' })
-            if (groups.length) groupId = groups[0].id
-        }
-
-        // Потом пробуем сгруппировать если нашли группу
-        if (groupId != null) {
-            try {
-                await tryGroupTabs({ groupId, tabIds: tab.id }, 0)
-                return
-            } catch (error) {
-                if (!error.message.includes('No tab with id') && !error.message.includes('No group with id')) {
-                    throw error
-                }
-            }
-        }
-
-        // Если мы не нашли групп или не смогли сгруппировать так как нет уже такой группы, то только тогда создаём эту группу
-        try {
-            groupId = await tryGroupTabs({ tabIds: tab.id }, 0)
-            await chrome.tabGroups.update(groupId, { color: 'green', title: 'PureVanilla' })
-        } catch (error) {
-            if (!error.message.includes('No tab with id') && !error.message.includes('No group with id')) {
-                throw error
-            }
-        }
-    } catch (error) {
-        throw error
-    } finally {
-        // release mutex
-        releaseMutex()
-    }
 }
 
 async function silentVote(project) {
@@ -803,37 +812,6 @@ function updateListeners(enable) {
 // после инициализации базы данных если обнаруживается что сейчас мы не голосуем и нет необходимости голосовать - мы разрегистрируем слушатели
 updateListeners(true)
 
-// async function _fetch(url, options, project) {
-//     let listener
-//     const removeListener = ()=>{
-//         if (listener) {
-//             chrome.webRequest.onBeforeRequest.removeListener(listener)
-//             listener = null
-//         }
-//     }
-//
-//     listener = (details)=>{
-//         //Да это костыль, а есть другой адекватный вариант достать requestId или хотя бы код ошибки net::ERR из fetch запроса?
-//         // noinspection JSUnresolvedVariable
-//         if ((details.initiator && details.initiator.includes(self.location.hostname) || (details.originUrl && details.originUrl.includes(self.location.hostname))) && details.url.includes(url)) {
-//             fetchProjects.set(details.requestId, project)
-//             removeListener()
-//         }
-//     }
-//     chrome.webRequest.onBeforeRequest.addListener(listener, {urls: ['<all_urls>']})
-//
-//     if (!options) options = {}
-//
-//     try {
-//         return await fetch(url, options)
-//     } catch(error) {
-//         throw error
-//     } finally {
-//         removeListener()
-//     }
-// }
-
-//Слушатель сообщений и ошибок
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     // noinspection JSIgnoredPromiseFromCall
     onRuntimeMessage(request, sender, sendResponse)
@@ -897,17 +875,6 @@ async function onRuntimeMessage(request, sender, sendResponse) {
         checkVote()
         return
     } else if (request === 'reloadAllSettings') {
-        const store = db.transaction('other', 'readwrite').store
-        settings = await store.get('settings')
-        generalStats = await store.get('generalStats')
-        todayStats = await store.get('todayStats')
-        for (const [key, value] of openedProjects) {
-            openedProjects.delete(key)
-            tryCloseTab(key, value, 0)
-        }
-        await store.put(openedProjects, 'openedProjects')
-        reloadAllAlarms()
-        checkVote()
         return
     } else if (request === 'reloadSettings') {
         settings = await db.get('other', 'settings')
@@ -1057,18 +1024,6 @@ async function tryCloseTab(tabId, project, attempt) {
     }
 }
 
-async function tryGroupTabs(options, attempt) {
-    try {
-        return await chrome.tabs.group(options)
-    } catch (error) {
-        if (error.message === 'Tabs cannot be edited right now (user may be dragging a tab).' && attempt < 3) {
-            await wait(500)
-            return await tryGroupTabs(options, ++attempt)
-        }
-        throw error
-    }
-}
-
 //Завершает голосование, если есть ошибка то обрабатывает её
 async function endVote(request, sender, project) {
     let timeout = settings.timeout
@@ -1086,6 +1041,7 @@ async function endVote(request, sender, project) {
                 }
                 opened.timeoutQueue = Date.now() + timeout
 
+                console.log('ended vote')
                 delete opened.nextAttempt
                 delete opened.countInject
 
@@ -1342,6 +1298,7 @@ async function endVote(request, sender, project) {
     await db.put('other', todayStats, 'todayStats')
     await updateValue('projects', project)
 
+    console.log('clearing next attempt')
     await chrome.alarms.clear('nextAttempt_' + project.key)
     if (project.time != null && project.time > Date.now()) {
         let create2 = true
@@ -1448,17 +1405,6 @@ chrome.notifications.onClicked.addListener(async function (notificationId) {
 })
 
 async function openOptionsPage() {
-    await chrome.runtime.openOptionsPage()
-    // Дикий костыль на ожидание загрузки вкладки, мы не можем адекватно передать в настройки нужные данные, поэтому придётся так костылять
-    const tab = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
-    if (!tab.length) return
-    if (tab[0].status !== 'complete') {
-        for (let i = 0; i < 9; i++) {
-            await wait(250)
-            const t = await chrome.tabs.get(tab[0].id)
-            if (t.status === 'complete') break
-        }
-    }
 }
 
 function getProjectPrefix(project, detailed) {
@@ -1517,8 +1463,18 @@ chrome.runtime.onInstalled.addListener(async function (details) {
         await openOptionsPage()
         chrome.runtime.sendMessage({ installed: true })
     } else if (details.reason === 'update') {
+    }
+    await refreshSites(async () => {
+        const store = db.transaction('other', 'readwrite').store
+        settings = await store.get('settings')
+        generalStats = await store.get('generalStats')
+        todayStats = await store.get('todayStats')
+        for (const [key, value] of openedProjects) {
+            openedProjects.delete(key)
+            tryCloseTab(key, value, 0)
+        }
+        await store.put(openedProjects, 'openedProjects')
+        reloadAllAlarms()
         checkVote()
-    }/* else if (details.reason === 'update' && details.previousVersion && (new Version(details.previousVersion)).compareTo(new Version('6.0.0')) === -1) {
-
-    }*/
+    })
 })
