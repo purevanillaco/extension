@@ -25,7 +25,7 @@ async function refreshSites() {
         }
         if(siteDisplay.primaryNext){
             const nextVote = new Date(siteDisplay.primaryNext).getTime() - Date.now()
-            if(nextVote > 0){
+            if(nextVote > 0 && nextVote < next){
                 next = nextVote
             }
         }
