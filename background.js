@@ -812,9 +812,33 @@ function updateListeners(enable) {
 // после инициализации базы данных если обнаруживается что сейчас мы не голосуем и нет необходимости голосовать - мы разрегистрируем слушатели
 updateListeners(true)
 
-chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
+async function handlePurevanillaMessage(request, sender, sendResponse) {
+    // Ensure message is in expected format
+    if (!request || request.type !== "FROM_PAGE") return;
+
+    // Ensure sender's tab URL is from purevanilla.co
+    if (sender.tab && !sender.tab.url.startsWith("https://purevanilla.co")) {
+        return;
+    }
+
+    console.log("Received valid message from purevanilla.co:", request.text);
+    if (awaitingEid) {
+        const transaction = pvDb.transaction("user", "readwrite");
+        const store = transaction.objectStore("user");
+        const { eid } = JSON.parse(request.text)
+        if (await store.get("eid") != eid) {
+            await store.put({ id: "eid", value: eid });
+            await chrome.tabs.remove(sender.tab.id);
+        }
+        await refreshNow()
+    }
+    return true;
+}
+
+chrome.runtime.onMessage.addListener(async function (request, sender, sendResponse) {
+    if (await handlePurevanillaMessage(request, sender, sendResponse)) return;
     // noinspection JSIgnoredPromiseFromCall
-    onRuntimeMessage(request, sender, sendResponse)
+    await onRuntimeMessage(request, sender, sendResponse)
     if (request.projectDeleted || request.projectRestart) {
         return true
     }
@@ -1452,19 +1476,10 @@ async function updateValue(objStore, value) {
     }
 }
 
-chrome.runtime.onInstalled.addListener(async function (details) {
-    await initializeFunc
-    // noinspection JSUnresolvedReference
-    if (!settings.operaAttention2 && (navigator?.userAgentData?.brands?.[0]?.brand === 'Opera' || (!!self.opr && !!opr.addons) || !!self.opera || navigator.userAgent.indexOf(' OPR/') >= 0)) {
-        chrome.runtime.openOptionsPage()
-        return
-    }
-    if (details.reason === 'install') {
-        await openOptionsPage()
-        chrome.runtime.sendMessage({ installed: true })
-    } else if (details.reason === 'update') {
-    }
-    await refreshSites(async () => {
+let awaitingEid = false
+async function refreshNow() {
+    console.log('scheduling refresh')
+    refreshSites(async () => {
         const store = db.transaction('other', 'readwrite').store
         settings = await store.get('settings')
         generalStats = await store.get('generalStats')
@@ -1476,5 +1491,25 @@ chrome.runtime.onInstalled.addListener(async function (details) {
         await store.put(openedProjects, 'openedProjects')
         reloadAllAlarms()
         checkVote()
+    }, async () => {
+        awaitingEid = true
+        chrome.tabs.create({ url: "https://purevanilla.co/vote", active: false });
+    }).then(() => {
+        console.log('refresh completed')
+    }).error(() => {
+        console.log('error while refreshing')
     })
+}
+chrome.runtime.onInstalled.addListener(async function (details) {
+    await initializeFunc
+    // noinspection JSUnresolvedReference
+    if (!settings.operaAttention2 && (navigator?.userAgentData?.brands?.[0]?.brand === 'Opera' || (!!self.opr && !!opr.addons) || !!self.opera || navigator.userAgent.indexOf(' OPR/') >= 0)) {
+        chrome.runtime.openOptionsPage()
+        return
+    }
+    if (details.reason === 'install') {
+        await openOptionsPage()
+        chrome.runtime.sendMessage({ installed: true })
+    }
+    await refreshNow()
 })

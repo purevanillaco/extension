@@ -1,5 +1,18 @@
-async function refreshSites(callback) {
-    console.log('refreshSites')
+let existingTimeout = null
+async function refreshSites(callback, retrieveEid) {
+    if (existingTimeout) {
+        clearTimeout(existingTimeout)
+    }
+
+    const transaction = await pvDb.transaction("user", "readonly");
+    const store = await transaction.objectStore("user");
+    const eid = (await store.get('eid'))?.value
+    if (eid == null) {
+        await retrieveEid()
+        return
+    }
+
+    console.log('refreshSites', eid)
     let next = 3600 * 1000 * 2
     try {
         let cursor = await db.transaction('projects', 'readwrite').store.index('rating').openCursor()
@@ -15,7 +28,7 @@ async function refreshSites(callback) {
             },
             method: 'POST',
             body: JSON.stringify({
-                username: 'quiquelhappy'
+                eid
             })
         })
         const data = await req.json()
@@ -39,7 +52,7 @@ async function refreshSites(callback) {
         console.error(error)
         next = 1000 * 60 * 5
     }
-    setTimeout(refreshSites, next)
+    existingTimeout = setTimeout(refreshSites, next)
 }
 
 

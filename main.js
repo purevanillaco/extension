@@ -13,6 +13,8 @@ var db
 //База данных логов
 // noinspection ES6ConvertVarToLetConst
 var dbLogs
+// purevanilla db
+var pvDb
 //Текущие открытые вкладки расширением
 // noinspection ES6ConvertVarToLetConst
 var openedProjects = new Map()
@@ -62,6 +64,13 @@ async function initializeConfig(background, version) {
                 db.createObjectStore('logs', { autoIncrement: true })
             }
         })
+    }
+    if (!pvDb) {
+        pvDb = await idb.openDB("pv", 1, {
+            upgrade(db) {
+                db.createObjectStore("user", { keyPath: "id" });
+            }
+        });
     }
     // noinspection JSUnusedGlobalSymbols
     try {
