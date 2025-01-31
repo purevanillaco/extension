@@ -34,7 +34,7 @@ function onUnhandledError(event) {
     }
 
     if (self.createNotif) { // noinspection JSIgnoredPromiseFromCall
-        createNotif(error, 'error', {dontLog: true})
+        createNotif(error, 'error', { dontLog: true })
         document.querySelectorAll('button[disabled]').forEach((el) => el.disabled = false)
     }
 
@@ -59,25 +59,25 @@ async function initializeConfig(background, version) {
     if (!dbLogs) {
         dbLogs = await idb.openDB('logs', 1, {
             upgrade(db/*, oldVersion, newVersion, transaction*/) {
-                db.createObjectStore('logs', {autoIncrement: true})
+                db.createObjectStore('logs', { autoIncrement: true })
             }
         })
     }
     // noinspection JSUnusedGlobalSymbols
     try {
-        db = await idb.openDB('avr', version ? version : 15, {upgrade})
+        db = await idb.openDB('avr', version ? version : 15, { upgrade })
     } catch (error) {
         //На случай если это версия MultiVote
         if (error.name === 'VersionError') {
             if (version) {
-                dbError({target: {source: {name: 'avr'}, error: error}})
+                dbError({ target: { source: { name: 'avr' }, error: error } })
                 return
             }
             console.log('Ошибка версии базы данных, возможно вы на версии MultiVote, пытаемся загрузить настройки версии MultiVote')
             await initializeConfig(background, 150)
             return
         }
-        dbError({target: {source: {name: 'avr'}, error: error}})
+        dbError({ target: { source: { name: 'avr' }, error: error } })
         return
     }
     db.onerror = (event) => dbError(event, false)
@@ -136,7 +136,7 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
     }
 
     if (oldVersion === 0) {
-        const projects = db.createObjectStore('projects', {autoIncrement: true})
+        const projects = db.createObjectStore('projects', { autoIncrement: true })
         projects.createIndex('rating, id, nick', ['rating', 'id', 'nick'])
         projects.createIndex('rating, id', ['rating', 'id'])
         projects.createIndex('rating', 'rating')
@@ -275,7 +275,7 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
         let cursor = await store.index('rating').openCursor('WARGM')
         while (cursor) {
             const project = cursor.value
-            project.randomize = {min: 0, max: 14400000}
+            project.randomize = { min: 0, max: 14400000 }
             await cursor.update(project)
             // noinspection JSVoidFunctionReturnValueUsed
             cursor = await cursor.continue()
@@ -303,7 +303,7 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
         let cursor = await store.index('rating').openCursor('CraftList')
         while (cursor) {
             const project = cursor.value
-            project.randomize = {min: 0, max: 3600000}
+            project.randomize = { min: 0, max: 3600000 }
             await cursor.update(project)
             // noinspection JSVoidFunctionReturnValueUsed
             cursor = await cursor.continue()
@@ -467,7 +467,7 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
             }
 
             if (project.rating === 'craftlist.org') {
-                project.error = chrome.i18n.getMessage('disabledSite','There is a high risk of being blocked for auto-voting, vote on this site manually')
+                project.error = chrome.i18n.getMessage('disabledSite', 'There is a high risk of being blocked for auto-voting, vote on this site manually')
                 project.time = Infinity
             }
 
@@ -492,7 +492,7 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
         let cursor = await transaction.objectStore('projects').index('rating').openCursor('topcraft.club')
         while (cursor) {
             const project = cursor.value
-            project.error = chrome.i18n.getMessage('disabledSite','Высокий риск быть заблокированным за авто-голосование, голосуйте на данном сайте вручную')
+            project.error = chrome.i18n.getMessage('disabledSite', 'Высокий риск быть заблокированным за авто-голосование, голосуйте на данном сайте вручную')
             project.time = Infinity
             await cursor.update(project)
             // noinspection JSVoidFunctionReturnValueUsed
@@ -503,7 +503,7 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
         let cursor2 = await transaction.objectStore('projects').index('rating').openCursor('mctop.su')
         while (cursor2) {
             const project = cursor2.value
-            project.error = chrome.i18n.getMessage('disabledSite','Высокий риск быть заблокированным за авто-голосование, голосуйте на данном сайте вручную')
+            project.error = chrome.i18n.getMessage('disabledSite', 'Высокий риск быть заблокированным за авто-голосование, голосуйте на данном сайте вручную')
             project.time = Infinity
             await cursor2.update(project)
             // noinspection JSVoidFunctionReturnValueUsed
@@ -513,7 +513,7 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
         let cursor3 = await transaction.objectStore('projects').index('rating').openCursor('monitoringminecraft.ru')
         while (cursor3) {
             const project = cursor3.value
-            project.error = chrome.i18n.getMessage('disabledSite','Сайт не работает')
+            project.error = chrome.i18n.getMessage('disabledSite', 'Сайт не работает')
             project.time = Infinity
             await cursor3.update(project)
             // noinspection JSVoidFunctionReturnValueUsed

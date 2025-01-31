@@ -5,6 +5,7 @@ const state = self.serviceWorker.state
 importScripts('libs/idb.umd.js')
 importScripts('projects.js')
 importScripts('main.js')
+importScripts('siteRefresh.js')
 
 // TODO отложенный importScripts пока не работают, подробнее https://bugs.chromium.org/p/chromium/issues/detail?id=1198822
 self.addEventListener('install', () => {
@@ -17,8 +18,6 @@ self.addEventListener('install', () => {
 // var fetchProjects = new Map()
 //ID группы вкладок в которой сейчас открыты вкладки расширения
 let groupId
-//Если этот браузер не поддерживает группировку вкладок
-let notSupportedGroupTabs = false
 
 //Нужно ли сейчас делать проверку голосования, false может быть только лишь тогда когда предыдущая проверка ещё не завершилась
 let check = true
@@ -44,12 +43,10 @@ async function checkVote() {
     //Если после попытки голосования не было интернета, проверяется есть ли сейчас интернет и если его нет то не допускает последующую проверку но есои наоборот появился интернет, устаналвивает статус online на true и пропускает код дальше
     if (!settings.disabledCheckInternet && !onLine) {
         if (navigator.onLine) {
-            console.log(chrome.i18n.getMessage('internetRestored'))
             onLine = true
             db.put('other', onLine, 'onLine')
         } else {
-            // TODO к сожалению в Service Worker отсутствует слушатель на восстановление соединения с интернетом, у нас остаётся только 1 вариант, это попытаться снова запустить checkVote через минуту
-            chrome.alarms.create('checkVote', {when: Date.now() + 65000})
+            chrome.alarms.create('checkVote', { when: Date.now() + 65000 })
             return
         }
     }
@@ -93,7 +90,7 @@ chrome.alarms.onAlarm.addListener(function (alarm) {
 })
 
 // TODO костыльное решение бага https://bugs.chromium.org/p/chromium/issues/detail?id=471524
-chrome.idle.onStateChanged.addListener(async function(newState) {
+chrome.idle.onStateChanged.addListener(async function (newState) {
     if (newState === 'active') {
         // noinspection JSIgnoredPromiseFromCall
         checkVote()
@@ -110,7 +107,7 @@ async function reloadAllAlarms() {
             let when = project.time
             if (when - Date.now() < 65000) when = Date.now() + 65000
             try {
-                chrome.alarms.create(String(cursor.key), {when})
+                chrome.alarms.create(String(cursor.key), { when })
             } catch (error) {
                 console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
             }
@@ -126,9 +123,7 @@ async function checkOpen(project, transaction) {
     //Если нет интернета, то не голосуем
     if (!settings.disabledCheckInternet) {
         if (!navigator.onLine && onLine) {
-            // TODO к сожалению в Service Worker отсутствует слушатель на восстановление соединения с интернетом, у нас остаётся только 1 вариант, это попытаться снова запустить checkVote через минуту
-            chrome.alarms.create('checkVote', {when: Date.now() + 65000})
-
+            chrome.alarms.create('checkVote', { when: Date.now() + 65000 })
             sendNotification(getProjectPrefix(project, false), chrome.i18n.getMessage('internetDisconnected'), 'error', 'openProject_' + project.key)
             console.warn(getProjectPrefix(project, true), chrome.i18n.getMessage('internetDisconnected'))
             onLine = false
@@ -139,7 +134,8 @@ async function checkOpen(project, transaction) {
         }
     }
 
-    for (let[tab,value] of openedProjects) {
+    for (let [tab, value] of openedProjects) {
+        console.log('checking open')
         if (value.timeoutQueue && Date.now() >= value.timeoutQueue) {
             openedProjects.delete(tab)
             db.put('other', openedProjects, 'openedProjects')
@@ -156,11 +152,8 @@ async function checkOpen(project, transaction) {
                 if (!value.nextAttempt) {
                     console.warn(getProjectPrefix(projectTimeout, true), 'nextAttempt is undefined, maybe it\'s an error')
                 }
-                console.warn(getProjectPrefix(projectTimeout, true), chrome.i18n.getMessage('timeout'))
-                sendNotification(getProjectPrefix(projectTimeout, false), chrome.i18n.getMessage('timeout'), 'warn', 'openProject_' + project.key)
-
                 // noinspection JSIgnoredPromiseFromCall
-                if (!settings.disableCloseTabsOnError) tryCloseTab(tab, projectTimeout, 0)
+                tryCloseTab(tab, projectTimeout, 0)
                 break
             }
         }
@@ -204,11 +197,11 @@ async function checkOpen(project, transaction) {
             if (project.rating === 'monitoringminecraft.ru') {
                 url = '.monitoringminecraft.ru'
             }
-            let cookies = await chrome.cookies.getAll({domain: url})
+            let cookies = await chrome.cookies.getAll({ domain: url })
             if (settings.debug) console.log(chrome.i18n.getMessage('deletingCookies', url))
             for (let i = 0; i < cookies.length; i++) {
                 if (cookies[i].domain.charAt(0) === '.') cookies[i].domain = cookies[i].domain.substring(1, cookies[i].domain.length)
-                await chrome.cookies.remove({url: 'https://' + cookies[i].domain + cookies[i].path, name: cookies[i].name})
+                await chrome.cookies.remove({ url: 'https://' + cookies[i].domain + cookies[i].path, name: cookies[i].name })
             }
         }
     }
@@ -269,7 +262,7 @@ async function newWindow(project, opened) {
             let when = opened.nextAttempt
             if (when - Date.now() < 65000) when = Date.now() + 65000
             try {
-                await chrome.alarms.create('nextAttempt_' + project.key, {when})
+                await chrome.alarms.create('nextAttempt_' + project.key, { when })
             } catch (error) {
                 console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
             }
@@ -296,25 +289,11 @@ async function newWindow(project, opened) {
 
         const url = allProjects[project.rating].voteURL(project)
 
-        let tab = await tryOpenTab({url, active: settings.disabledFocusedTab || Boolean(allProjects[project.rating].focusedTab?.(project))}, project, 0)
+        let tab = await tryOpenTab({ url, active: settings.disabledFocusedTab || Boolean(allProjects[project.rating].focusedTab?.(project)) }, project, 0)
         if (tab == null) return
         openedProjects.set(tab.id, opened)
         openedProjects.delete('start_' + project.key)
         db.put('other', openedProjects, 'openedProjects')
-
-        if (notSupportedGroupTabs) return
-        try {
-            await promiseGroup
-            promiseGroup = groupTabs(tab)
-            await promiseGroup
-        } catch (error) {
-            if (error.message === 'Tabs cannot be edited right now (user may be dragging a tab).') {
-                console.warn(getProjectPrefix(project, true), 'Error when grouping tabs,', error.message)
-            } else {
-                notSupportedGroupTabs = true
-                console.warn(chrome.i18n.getMessage('notSupportedGroupTabs'), error.message)
-            }
-        }
     }
 }
 
@@ -323,44 +302,14 @@ async function checkWindow(project) {
         .catch(error => console.warn(chrome.i18n.getMessage('errorOpenTab', error.message)))
     if (!windows?.length) {
         try {
-            const window = await chrome.windows.create({focused: false})
-            await chrome.windows.update(window.id, {focused: false, drawAttention: false})
+            const window = await chrome.windows.create({ focused: false })
+            await chrome.windows.update(window.id, { focused: false, drawAttention: false })
         } catch (error) {
-            endVote({errorOpenTab: error.message}, null, project)
+            endVote({ errorOpenTab: error.message }, null, project)
             return false
         }
     }
     return true
-}
-
-async function groupTabs(tab) {
-    // С начало ищем группу вкладок
-    if (groupId == null) {
-        const groups = await chrome.tabGroups.query({title: 'Auto Vote Rating'})
-        if (groups.length) groupId = groups[0].id
-    }
-
-    // Потом пробуем сгруппировать если нашли группу
-    if (groupId != null) {
-        try {
-            await tryGroupTabs({groupId, tabIds: tab.id}, 0)
-            return
-        } catch (error) {
-            if (!error.message.includes('No tab with id') && !error.message.includes('No group with id')) {
-                throw error
-            }
-        }
-    }
-
-    // Если мы не нашли групп или не смогли сгруппировать так как нет уже такой группы, то только тогда создаём эту группу
-    try {
-        groupId = await tryGroupTabs({tabIds: tab.id}, 0)
-        await chrome.tabGroups.update(groupId, {color: 'blue', title: 'Auto Vote Rating'})
-    } catch (error) {
-        if (!error.message.includes('No tab with id') && !error.message.includes('No group with id')) {
-            throw error
-        }
-    }
 }
 
 async function silentVote(project) {
@@ -369,12 +318,12 @@ async function silentVote(project) {
     }
     try {
         if (project.rating === 'Custom') {
-            let response = await fetch(project.responseURL, {...project.body})
+            let response = await fetch(project.responseURL, { ...project.body })
             await response.text()
             if (response.ok) {
-                endVote({successfully: true}, null, project)
+                endVote({ successfully: true }, null, project)
             } else {
-                endVote({errorVote: [String(response.status), response.url]}, null, project)
+                endVote({ errorVote: [String(response.status), response.url] }, null, project)
             }
             return
         }
@@ -394,8 +343,8 @@ async function silentVote(project) {
             //     }
             // }
             // if (!found) {
-                endVote({notConnectInternet: true}, null, project)
-                // endVote({message: chrome.i18n.getMessage('errorVoteUnknown') + (error.stack ? error.stack : e)}, null, project)
+            endVote({ notConnectInternet: true }, null, project)
+            // endVote({message: chrome.i18n.getMessage('errorVoteUnknown') + (error.stack ? error.stack : e)}, null, project)
             // }
         } else {
             let message
@@ -448,11 +397,11 @@ async function checkResponseError(project, response, url, bypassCodes, vk) {
         } else {
             text = 'null'
         }
-        endVote({errorAuthVK: text}, null, project)
+        endVote({ errorAuthVK: text }, null, project)
         return false
     }
     if (!host.includes(url)) {
-        endVote({message: chrome.i18n.getMessage('errorRedirected', response.url)}, null, project)
+        endVote({ message: chrome.i18n.getMessage('errorRedirected', response.url) }, null, project)
         return false
     }
     if (bypassCodes) {
@@ -463,7 +412,7 @@ async function checkResponseError(project, response, url, bypassCodes, vk) {
         }
     }
     if (!response.ok) {
-        endVote({errorVote: [String(response.status), response.url]}, null, project)
+        endVote({ errorVote: [String(response.status), response.url] }, null, project)
         return false
     }
     if (response.statusText && response.statusText !== '' && response.statusText !== 'ok' && response.statusText !== 'OK') {
@@ -473,7 +422,7 @@ async function checkResponseError(project, response, url, bypassCodes, vk) {
     return true
 }
 
-const webNavigationOnCommittedListener = function(details) {
+const webNavigationOnCommittedListener = function (details) {
     if (!initializeFunc.done) {
         (async () => {
             await initializeFunc
@@ -519,16 +468,16 @@ const webNavigationOnCommittedListener = function(details) {
             filesMain.push('scripts/main/alert_main.js')
         }
     } else if (details.url.match(/hcaptcha.com\/captcha\/*/)
-            || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/api.\/anchor*/)
-            || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/api.\/bframe*/)
-            || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/api.\/anchor*/)
-            || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/api.\/bframe*/)
-            || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/api\/fallback*/)
-            || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/api\/fallback*/)
-            || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/enterprise\/fallback*/)
-            || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/enterprise\/anchor*/)
-            || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/enterprise\/bframe*/)
-            || details.url.match(/https:\/\/challenges.cloudflare.com\/*/)) {
+        || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/api.\/anchor*/)
+        || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/api.\/bframe*/)
+        || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/api.\/anchor*/)
+        || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/api.\/bframe*/)
+        || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/api\/fallback*/)
+        || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/api\/fallback*/)
+        || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/enterprise\/fallback*/)
+        || details.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/enterprise\/anchor*/)
+        || details.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/enterprise\/bframe*/)
+        || details.url.match(/https:\/\/challenges.cloudflare.com\/*/)) {
         filesMain.push('scripts/main/visible.js')
         filesIsolated.push('scripts/main/alert_isolated.js')
         filesMain.push('scripts/main/alert_main.js')
@@ -538,11 +487,11 @@ const webNavigationOnCommittedListener = function(details) {
 
     if (settings.debug) console.log('Injecting ' + JSON.stringify(filesIsolated) + ', ' + JSON.stringify(filesMain) + ' to ' + details.url)
 
-    let target = {tabId: details.tabId}
+    let target = { tabId: details.tabId }
     if (details.frameId) target.frameIds = [details.frameId]
 
     if (filesIsolated.length) {
-        chrome.scripting.executeScript({target, files: filesIsolated, injectImmediately: true}, () => {
+        chrome.scripting.executeScript({ target, files: filesIsolated, injectImmediately: true }, () => {
             const error = chrome.runtime.lastError
             if (error) {
                 catchTabError(error, opened)
@@ -550,7 +499,7 @@ const webNavigationOnCommittedListener = function(details) {
         })
     }
     if (filesMain.length) {
-        chrome.scripting.executeScript({target, files: filesMain, world: 'MAIN', injectImmediately: true}, () => {
+        chrome.scripting.executeScript({ target, files: filesMain, world: 'MAIN', injectImmediately: true }, () => {
             const error = chrome.runtime.lastError
             if (error) {
                 catchTabError(error, opened)
@@ -560,7 +509,7 @@ const webNavigationOnCommittedListener = function(details) {
 }
 
 //Слушатель на обновление вкладок, если вкладка полностью загрузилась, загружает туда скрипт который сам нажимает кнопку проголосовать
-const webNavigationOnCompletedListener = async function(details) {
+const webNavigationOnCompletedListener = async function (details) {
     await initializeFunc
     let opened = openedProjects.get(details.tabId)
     if (!opened) return
@@ -584,13 +533,13 @@ const webNavigationOnCompletedListener = async function(details) {
         // }
 
         if (opened.countInject >= 10) {
-            endVote({tooManyVoteAttempts: true}, {tab: {id: details.tabId}, url: details.url}, opened)
+            endVote({ tooManyVoteAttempts: true }, { tab: { id: details.tabId }, url: details.url }, opened)
             return
         }
 
         try {
             if (allProjects[project.rating]?.needPrompt?.()) {
-                const funcPrompt = function(nick) {
+                const funcPrompt = function (nick) {
                     // noinspection JSUnusedLocalSymbols
                     window.prompt = new Proxy(window.prompt, {
                         apply(target, thisArg, argArray) {
@@ -599,18 +548,18 @@ const webNavigationOnCompletedListener = async function(details) {
                     })
                 }
                 if (settings.debug) console.log('Injecting funcPrompt to ' + details.url)
-                await chrome.scripting.executeScript({target: {tabId: details.tabId}, world: 'MAIN', func: funcPrompt, args: [project.nick]})
+                await chrome.scripting.executeScript({ target: { tabId: details.tabId }, world: 'MAIN', func: funcPrompt, args: [project.nick] })
             }
 
-            if (settings.debug) console.log('Injecting scripts/' + project.rating.toLowerCase() +'.js, scripts/main/api.js to ' + details.url)
-            await chrome.scripting.executeScript({target: {tabId: details.tabId}, files: ['scripts/main/hacktimer.js', 'scripts/' + (project.ratingMain || project.rating) +'.js', 'scripts/main/api.js']})
+            if (settings.debug) console.log('Injecting scripts/' + project.rating.toLowerCase() + '.js, scripts/main/api.js to ' + details.url)
+            await chrome.scripting.executeScript({ target: { tabId: details.tabId }, files: ['scripts/main/hacktimer.js', 'scripts/' + (project.ratingMain || project.rating) + '.js', 'scripts/main/api.js'] })
             // noinspection JSUnresolvedVariable,JSUnresolvedFunction
             if (allProjects[project.rating]?.needWorld?.()) {
-                if (settings.debug) console.log('Injecting scripts/' + project.rating.toLowerCase() +'_world.js to ' + details.url + ' in MAIN world')
-                await chrome.scripting.executeScript({target: {tabId: details.tabId}, world: 'MAIN', files: ['scripts/' + (project.ratingMain || project.rating) +'_world.js']})
+                if (settings.debug) console.log('Injecting scripts/' + project.rating.toLowerCase() + '_world.js to ' + details.url + ' in MAIN world')
+                await chrome.scripting.executeScript({ target: { tabId: details.tabId }, world: 'MAIN', files: ['scripts/' + (project.ratingMain || project.rating) + '_world.js'] })
             }
 
-            await chrome.tabs.sendMessage(details.tabId, {sendProject: true, project, settings})
+            await chrome.tabs.sendMessage(details.tabId, { sendProject: true, project, settings })
 
             if (openedProjects.has(details.tabId)) {
                 opened.countInject++
@@ -636,7 +585,7 @@ const webNavigationOnCompletedListener = async function(details) {
 
         try {
             if (settings.debug) console.log('Injecting scripts/main/captchaclicker.js to ' + details.url)
-            await chrome.scripting.executeScript({target: {tabId: details.tabId, frameIds: [details.frameId]}, files: ['scripts/main/hacktimer.js', 'scripts/main/captchaclicker.js']})
+            await chrome.scripting.executeScript({ target: { tabId: details.tabId, frameIds: [details.frameId] }, files: ['scripts/main/hacktimer.js', 'scripts/main/captchaclicker.js'] })
 
             // Если вкладка уже загружена, повторно туда высылаем sendProject который обозначает что мы готовы к голосованию
             const tab = await chrome.tabs.get(details.tabId)
@@ -645,7 +594,7 @@ const webNavigationOnCompletedListener = async function(details) {
             // расширение отошлёт сообщение о пройденной капче ещё не внедрённому скрипту голосования что приведёт к зависанию голосования
             // например сайт ionmc.top загружает капчу раньше чем страница загрузилась
             if (tab.status != null && tab.status !== 'complete') return
-            await chrome.tabs.sendMessage(details.tabId, {sendProject: true, project, settings})
+            await chrome.tabs.sendMessage(details.tabId, { sendProject: true, project, settings })
         } catch (error) {
             catchTabError(error, project)
         }
@@ -666,14 +615,14 @@ async function catchTabError(error, project) {
     }
 }
 
-const tabsOnRemovedListener = async function(tabId) {
+const tabsOnRemovedListener = async function (tabId) {
     await initializeFunc
     let opened = openedProjects.get(tabId)
     if (!opened) return
-    endVote({closedTab: true}, {tab: {id: tabId}}, opened)
+    endVote({ closedTab: true }, { tab: { id: tabId } }, opened)
 }
 
-const webRequestOnCompletedListener = async function(details) {
+const webRequestOnCompletedListener = async function (details) {
     await initializeFunc
     let opened = openedProjects.get(details.tabId)
     if (!opened) return
@@ -686,8 +635,8 @@ const webRequestOnCompletedListener = async function(details) {
             opened.countInject--
             db.put('other', openedProjects, 'openedProjects')
         } else {
-            const sender = {tab: {id: details.tabId}, url: details.url}
-            endVote({errorVote: [String(details.statusCode), details.url]}, sender, opened)
+            const sender = { tab: { id: details.tabId }, url: details.url }
+            endVote({ errorVote: [String(details.statusCode), details.url] }, sender, opened)
         }
     }
 }
@@ -709,8 +658,8 @@ const webRequestOnErrorOccurredListener = async function (details) {
                 // console.warn(getProjectPrefix(project, true), details.error)
                 return
             }
-            const sender = {tab: {id: details.tabId}, url: details.url}
-            endVote({errorVoteNetwork: [details.error, details.url]}, sender, opened)
+            const sender = { tab: { id: details.tabId }, url: details.url }
+            endVote({ errorVoteNetwork: [details.error, details.url] }, sender, opened)
         }
     }
 }
@@ -728,8 +677,8 @@ const webNavigationOnErrorOccurredListener = async function (details) {
                 // console.warn(getProjectPrefix(project, true), details.error)
                 return
             }
-            const sender = {tab: {id: details.tabId}, url: details.url}
-            endVote({errorVoteNetwork: [details.error, details.url]}, sender, opened)
+            const sender = { tab: { id: details.tabId }, url: details.url }
+            endVote({ errorVoteNetwork: [details.error, details.url] }, sender, opened)
         }
     }
 }
@@ -759,11 +708,11 @@ function updateListeners(enable) {
         }
         if (!chrome.webRequest.onCompleted.hasListeners()) {
             if (settings?.debug) console.log('Регистрация слушателя webRequest.onCompleted')
-            chrome.webRequest.onCompleted.addListener(webRequestOnCompletedListener, {urls: ['<all_urls>']})
+            chrome.webRequest.onCompleted.addListener(webRequestOnCompletedListener, { urls: ['<all_urls>'] })
         }
         if (!chrome.webRequest.onErrorOccurred.hasListeners()) {
             if (settings?.debug) console.log('Регистрация слушателя webRequest.onErrorOccurred')
-            chrome.webRequest.onErrorOccurred.addListener(webRequestOnErrorOccurredListener, {urls: ['<all_urls>']})
+            chrome.webRequest.onErrorOccurred.addListener(webRequestOnErrorOccurredListener, { urls: ['<all_urls>'] })
         }
     } else {
         chrome.webNavigation.onErrorOccurred.removeListener(webNavigationOnErrorOccurredListener)
@@ -810,7 +759,7 @@ updateListeners(true)
 // }
 
 //Слушатель сообщений и ошибок
-chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
     // noinspection JSIgnoredPromiseFromCall
     onRuntimeMessage(request, sender, sendResponse)
     if (request.projectDeleted || request.projectRestart) {
@@ -822,7 +771,7 @@ let fakeIdToId = {};
 async function onRuntimeMessage(request, sender, sendResponse) {
     if (request.reloadCaptcha) {
         // noinspection JSVoidFunctionReturnValueUsed,JSCheckFunctionSignatures
-        const frames = await chrome.webNavigation.getAllFrames({tabId: sender.tab.id})
+        const frames = await chrome.webNavigation.getAllFrames({ tabId: sender.tab.id })
         for (const frame of frames) {
             // noinspection JSUnresolvedVariable
             if (frame.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/api.\/anchor*/) || frame.url.match(/https?:\/\/(.+?\.)?recaptcha.net\/recaptcha\/api.\/anchor*/) || frame.url.match(/https?:\/\/(.+?\.)?google.com\/recaptcha\/enterprise\/anchor*/)) {
@@ -834,7 +783,7 @@ async function onRuntimeMessage(request, sender, sendResponse) {
                     console.log('Injecting funcReloadCaptcha to ' + frame.url)
                 }
                 // noinspection JSCheckFunctionSignatures,JSUnresolvedVariable
-                await chrome.scripting.executeScript({target: {tabId: sender.tab.id, frameIds: [frame.frameId]}, func: reload})
+                await chrome.scripting.executeScript({ target: { tabId: sender.tab.id, frameIds: [frame.frameId] }, func: reload })
             }
         }
         return
@@ -877,7 +826,7 @@ async function onRuntimeMessage(request, sender, sendResponse) {
         settings = await store.get('settings')
         generalStats = await store.get('generalStats')
         todayStats = await store.get('todayStats')
-        for (const[key,value] of openedProjects) {
+        for (const [key, value] of openedProjects) {
             openedProjects.delete(key)
             tryCloseTab(key, value, 0)
         }
@@ -892,7 +841,7 @@ async function onRuntimeMessage(request, sender, sendResponse) {
         const transaction = db.transaction(['projects', 'other'], 'readwrite')
         let nowVoting = false
         //Если эта вкладка была уже открыта, он закрывает её
-        for (const[key,value] of openedProjects) {
+        for (const [key, value] of openedProjects) {
             if (request.projectDeleted.key === value.key) {
                 if (key === 'start_' + request.projectDeleted.key) {
                     sendResponse('reject')
@@ -915,7 +864,7 @@ async function onRuntimeMessage(request, sender, sendResponse) {
         return
     } else if (request.projectRestart) {
         const transaction = db.transaction(['projects', 'other'], 'readwrite')
-        for (const[key,value] of openedProjects) {
+        for (const [key, value] of openedProjects) {
             if (request.projectRestart.key === value.key) {
                 if (request.confirmed) {
                     openedProjects.delete(key)
@@ -928,7 +877,7 @@ async function onRuntimeMessage(request, sender, sendResponse) {
                 }
             }
         }
-        for (const[key,value] of openedProjects) {
+        for (const [key, value] of openedProjects) {
             if (request.projectRestart.rating === value.rating || settings.disabledOneVote) {
                 if (request.confirmed) {
                     openedProjects.delete(key)
@@ -993,7 +942,7 @@ async function onRuntimeMessage(request, sender, sendResponse) {
 
 async function triggerTimer(name, sender, fakeId) {
     try {
-        await chrome.tabs.sendMessage(sender.tab.id, {HackTimer: true, fakeId}, {documentId: sender.documentId, frameId: sender.frameId});
+        await chrome.tabs.sendMessage(sender.tab.id, { HackTimer: true, fakeId }, { documentId: sender.documentId, frameId: sender.frameId });
     } catch (error) {
         if (name === 'setInterval') clearInterval(fakeIdToId[fakeId]);
         delete fakeIdToId[fakeId];
@@ -1002,13 +951,16 @@ async function triggerTimer(name, sender, fakeId) {
 
 async function tryOpenTab(request, project, attempt) {
     try {
-        return await chrome.tabs.create(request)
+        return await chrome.tabs.create({
+            ...request,
+            pinned: true
+        })
     } catch (error) {
         if (error.message === 'Tabs cannot be edited right now (user may be dragging a tab).' && attempt < 3) {
             await wait(500)
             return await tryOpenTab(request, project, ++attempt)
         }
-        endVote({errorOpenTab: error.message}, null, project)
+        endVote({ errorOpenTab: error.message }, null, project)
         return null
     }
 }
@@ -1025,20 +977,7 @@ async function tryCloseTab(tabId, project, attempt) {
         }
         if (!error.message.includes('No tab with id')) {
             console.warn(getProjectPrefix(project, true), error.message)
-            sendNotification(getProjectPrefix(project, false), error.message, 'error', 'openProject_' + project.key)
         }
-    }
-}
-
-async function tryGroupTabs(options, attempt) {
-    try {
-        return await chrome.tabs.group(options)
-    } catch (error) {
-        if (error.message === 'Tabs cannot be edited right now (user may be dragging a tab).' && attempt < 3) {
-            await wait(500)
-            return await tryGroupTabs(options, ++attempt)
-        }
-        throw error
     }
 }
 
@@ -1047,7 +986,7 @@ async function endVote(request, sender, project) {
     let timeout = settings.timeout
 
     let opened
-    for (const [tab,value] of openedProjects) {
+    for (const [tab, value] of openedProjects) {
         if (project.key === value.key) {
             if (!Number.isInteger(tab) && !tab.startsWith('background_') && !tab.startsWith('start_')) {
                 console.warn('A double attempt to complete the vote? endVote, has openedProjects', JSON.stringify(request), JSON.stringify(sender), JSON.stringify(project))
@@ -1342,7 +1281,7 @@ async function endVote(request, sender, project) {
         }
         if (create2) {
             try {
-                await chrome.alarms.create(String(project.key), {when})
+                await chrome.alarms.create(String(project.key), { when })
             } catch (error) {
                 console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
             }
@@ -1350,7 +1289,7 @@ async function endVote(request, sender, project) {
     }
 
     async function removeQueue() {
-        for (const [tab,value] of openedProjects) {
+        for (const [tab, value] of openedProjects) {
             if (tab.startsWith?.('queue_') && project.key === value.key) {
                 openedProjects.delete(tab)
             }
@@ -1359,7 +1298,7 @@ async function endVote(request, sender, project) {
         checkVote()
     }
 
-    setTimeout(()=>{
+    setTimeout(() => {
         removeQueue()
     }, timeout)
 
@@ -1367,7 +1306,7 @@ async function endVote(request, sender, project) {
     let alarmTimeout = timeout
     if (alarmTimeout < 65000) alarmTimeout = 65000
     try {
-        await chrome.alarms.create('checkVote', {when: Date.now() + alarmTimeout})
+        await chrome.alarms.create('checkVote', { when: Date.now() + alarmTimeout })
     } catch (error) {
         console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
     }
@@ -1384,7 +1323,7 @@ function sendNotification(title, message, type, notificationId) {
     if (type === 'warn' || type === 'error') {
         (async () => {
             try {
-                await chrome.runtime.sendMessage({notification: {title, message, type, notificationId}})
+                await chrome.runtime.sendMessage({ notification: { title, message, type, notificationId } })
             } catch (error) {
                 if (!error.message.includes('Could not establish connection. Receiving end does not exist') && !error.message.includes('The message port closed before a response was received')) {
                     console.warn(error.message)
@@ -1402,16 +1341,16 @@ function sendNotification(title, message, type, notificationId) {
         title: title,
         message: message
     }
-    chrome.notifications.create(notificationId, notification, function() {})
+    chrome.notifications.create(notificationId, notification, function () { })
 }
 chrome.notifications.onClicked.addListener(async function (notificationId) {
     if (notificationId.startsWith('openTab_')) {
         try {
             const tabId = Number(notificationId.replace('openTab_', ''))
             if (!tabId) return
-            const tab = await chrome.tabs.update(tabId, {active: true})
+            const tab = await chrome.tabs.update(tabId, { active: true })
             if (!tab) return
-            await chrome.windows.update(tab.windowId, {focused: true})
+            await chrome.windows.update(tab.windowId, { focused: true })
         } catch (error) {
             if (!error.message.includes('No tab with id')) {
                 console.warn('Ошибка при фокусировке на вкладку', error.message)
@@ -1423,7 +1362,7 @@ chrome.notifications.onClicked.addListener(async function (notificationId) {
             const found = await db.count('projects', projectKey)
             if (!found) return
             await openOptionsPage()
-            await chrome.runtime.sendMessage({openProject: projectKey})
+            await chrome.runtime.sendMessage({ openProject: projectKey })
         } catch (error) {
             console.warn('Ошибка открытия настроек с определённым проектом', error.message)
         }
@@ -1435,7 +1374,7 @@ chrome.notifications.onClicked.addListener(async function (notificationId) {
 async function openOptionsPage() {
     await chrome.runtime.openOptionsPage()
     // Дикий костыль на ожидание загрузки вкладки, мы не можем адекватно передать в настройки нужные данные, поэтому придётся так костылять
-    const tab = await chrome.tabs.query({active: true, lastFocusedWindow: true})
+    const tab = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
     if (!tab.length) return
     if (tab[0].status !== 'complete') {
         for (let i = 0; i < 9; i++) {
@@ -1479,7 +1418,7 @@ async function updateValue(objStore, value) {
         await store.put(value, value.key);
         (async () => {
             try {
-                await chrome.runtime.sendMessage({updateValue: objStore, value})
+                await chrome.runtime.sendMessage({ updateValue: objStore, value })
             } catch (error) {
                 if (!error.message.includes('Could not establish connection. Receiving end does not exist') && !error.message.includes('The message port closed before a response was received')) {
                     console.error(error.message)
@@ -1491,7 +1430,7 @@ async function updateValue(objStore, value) {
     }
 }
 
-chrome.runtime.onInstalled.addListener(async function(details) {
+chrome.runtime.onInstalled.addListener(async function (details) {
     await initializeFunc
     // noinspection JSUnresolvedReference
     if (!settings.operaAttention2 && (navigator?.userAgentData?.brands?.[0]?.brand === 'Opera' || (!!self.opr && !!opr.addons) || !!self.opera || navigator.userAgent.indexOf(' OPR/') >= 0)) {
@@ -1500,7 +1439,7 @@ chrome.runtime.onInstalled.addListener(async function(details) {
     }
     if (details.reason === 'install') {
         await openOptionsPage()
-        chrome.runtime.sendMessage({installed: true})
+        chrome.runtime.sendMessage({ installed: true })
     } else if (details.reason === 'update') {
         checkVote()
     }/* else if (details.reason === 'update' && details.previousVersion && (new Version(details.previousVersion)).compareTo(new Version('6.0.0')) === -1) {
