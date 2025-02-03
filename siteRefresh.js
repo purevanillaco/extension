@@ -18,7 +18,6 @@ async function refreshSites(callback, retrieveEid) {
         let cursor = await db.transaction('projects', 'readwrite').store.index('rating').openCursor()
         while (cursor) {
             await cursor.delete()
-            chrome.alarms.clear(String(cursor.primaryKey))
             cursor = await cursor.continue()
         }
         const req = await fetch('https://api.beta.serverbench.io/community/hn2qqSZ30ebQWWd_7uso9/listing/display', {
@@ -34,10 +33,17 @@ async function refreshSites(callback, retrieveEid) {
         const data = await req.json()
         for (const siteDisplay of data.sites) {
             if (siteDisplay.secondary) continue;
+            const nextVote = siteDisplay.next ? new Date(siteDisplay.next) : null
+            if (nextVote) {
+                const relative = nextVote - Date.now()
+                if (relative > 0 && relative < next) {
+                    next = relative
+                }
+            }
             await buildProject(
                 siteDisplay.site.url,
                 siteDisplay.last ? new Date(siteDisplay.last) : null,
-                siteDisplay.next ? new Date(siteDisplay.next) : null,
+                nextVote,
                 data.member.name
             )
         }
@@ -47,12 +53,20 @@ async function refreshSites(callback, retrieveEid) {
                 next = nextVote
             }
         }
-        await callback()
+        try {
+            await callback()
+        } catch (error) {
+            console.error(error)
+        }
     } catch (error) {
         console.error(error)
         next = 1000 * 60 * 5
     }
-    existingTimeout = setTimeout(refreshSites, next)
+    console.log('next refresh: ', new Date(Date.now() + next))
+    existingTimeout = setTimeout(async () => {
+        await refreshSites(callback, retrieveEid)
+    }, next)
+    firstRequest = false
 }
 
 
@@ -109,7 +123,7 @@ async function buildProject(url, lastVote, nextVote, username) {
         added: Date.now()
     }
     if (nextVote) {
-        project.time = newVote.getTime()
+        project.time = nextVote.getTime()
     }
     await addProject(project)
 }
@@ -129,20 +143,5 @@ async function addProjectList(project, preBend) {
         const store = await db.transaction('projects', 'readwrite').store
         project.key = await store.put(project)
         await store.put(project, project.key)
-
-        if (project.time != null && project.time > Date.now()) {
-            let create = true
-            const alarms = await chrome.alarms.getAll()
-            for (const alarm of alarms) {
-                // noinspection JSUnresolvedVariable
-                if (alarm.scheduledTime === project.time) {
-                    create = false
-                    break
-                }
-            }
-            if (create) {
-                await chrome.alarms.create(String(project.key), { when: project.time })
-            }
-        }
     }
 }

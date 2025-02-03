@@ -7,6 +7,8 @@ importScripts('projects.js')
 importScripts('main.js')
 importScripts('siteRefresh.js')
 
+const retryCooldown = 3600 * 1000 * 2
+
 // TODO отложенный importScripts пока не работают, подробнее https://bugs.chromium.org/p/chromium/issues/detail?id=1198822
 self.addEventListener('install', () => {
     importScripts('libs/linkedom.js')
@@ -50,8 +52,9 @@ async function checkVote() {
             onLine = true
             db.put('other', onLine, 'onLine')
         } else {
-            // TODO к сожалению в Service Worker отсутствует слушатель на восстановление соединения с интернетом, у нас остаётся только 1 вариант, это попытаться снова запустить checkVote через минуту
-            chrome.alarms.create('checkVote', { when: Date.now() + 65000 })
+            setTimeout(async () => {
+                await checkVote()
+            }, 60 * 1000 + 50)
             return
         }
     }
@@ -87,51 +90,20 @@ async function checkVote() {
     }
 }
 
-//Триггер на голосование когда подходит время голосования
-chrome.alarms.onAlarm.addListener(function (alarm) {
-    if (settings?.debug) console.log('chrome.alarms.onAlarm', JSON.stringify(alarm))
-    // noinspection JSIgnoredPromiseFromCall
-    checkVote()
-})
-
-// TODO костыльное решение бага https://bugs.chromium.org/p/chromium/issues/detail?id=471524
 chrome.idle.onStateChanged.addListener(async function (newState) {
     if (newState === 'active') {
-        // noinspection JSIgnoredPromiseFromCall
         checkVote()
     }
 })
-
-async function reloadAllAlarms() {
-    await chrome.alarms.clearAll()
-    let cursor = await db.transaction('projects').store.openCursor()
-    const times = []
-    while (cursor) {
-        const project = cursor.value
-        if (project.time != null && project.time > Date.now() && times.indexOf(project.time) === -1) {
-            let when = project.time
-            if (when - Date.now() < 65000) when = Date.now() + 65000
-            try {
-                chrome.alarms.create(String(cursor.key), { when })
-            } catch (error) {
-                console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
-            }
-            times.push(project.time)
-        }
-        // noinspection JSVoidFunctionReturnValueUsed
-        cursor = await cursor.continue()
-    }
-}
 
 let promises = []
 async function checkOpen(project, transaction) {
     //Если нет интернета, то не голосуем
     if (!settings.disabledCheckInternet) {
         if (!navigator.onLine && onLine) {
-            // TODO к сожалению в Service Worker отсутствует слушатель на восстановление соединения с интернетом, у нас остаётся только 1 вариант, это попытаться снова запустить checkVote через минуту
-            chrome.alarms.create('checkVote', { when: Date.now() + 65000 })
-
-            sendNotification(getProjectPrefix(project, false), chrome.i18n.getMessage('internetDisconnected'), 'error', 'openProject_' + project.key)
+            setTimeout(async () => {
+                await checkVote()
+            }, 60 * 1000 + 5);
             console.warn(getProjectPrefix(project, true), chrome.i18n.getMessage('internetDisconnected'))
             onLine = false
             db.put('other', onLine, 'onLine')
@@ -159,9 +131,6 @@ async function checkOpen(project, transaction) {
                     console.warn(getProjectPrefix(projectTimeout, true), 'nextAttempt is undefined, maybe it\'s an error')
                 }
                 console.warn(getProjectPrefix(projectTimeout, true), chrome.i18n.getMessage('timeout'))
-                sendNotification(getProjectPrefix(projectTimeout, false), chrome.i18n.getMessage('timeout'), 'warn', 'openProject_' + project.key)
-
-                // noinspection JSIgnoredPromiseFromCall
                 if (!settings.disableCloseTabsOnError) tryCloseTab(tab, projectTimeout, 0)
                 break
             }
@@ -180,8 +149,7 @@ async function checkOpen(project, transaction) {
     if (project.randomize) opened.randomize = project.randomize
 
     if (!settings.disabledRestartOnTimeout) {
-        let retryCoolDown = 3600 * 1000 * 2
-        opened.nextAttempt = Date.now() + retryCoolDown
+        opened.nextAttempt = Date.now() + retryCooldown
     }
 
     // Голосование запускается впервые
@@ -227,7 +195,6 @@ async function newWindow(project, opened) {
     }
 
     console.log(getProjectPrefix(project, true), chrome.i18n.getMessage('startedAutoVote'))
-    sendNotification(getProjectPrefix(project, false), chrome.i18n.getMessage('startedAutoVote'), 'start', 'openProject_' + project.key)
 
     if (new Date(project.stats.lastAttemptVote).getMonth() < new Date().getMonth() || new Date(project.stats.lastAttemptVote).getFullYear() < new Date().getFullYear()) {
         project.stats.lastMonthSuccessVotes = project.stats.monthSuccessVotes
@@ -254,26 +221,6 @@ async function newWindow(project, opened) {
     await db.put('other', generalStats, 'generalStats')
     await db.put('other', todayStats, 'todayStats')
     await updateValue('projects', project)
-
-    if (!settings.disabledRestartOnTimeout) {
-        let create = true
-        let alarms = await chrome.alarms.getAll()
-        for (const alarm of alarms) {
-            if (alarm.scheduledTime === opened.nextAttempt) {
-                create = false
-                break
-            }
-        }
-        if (create) {
-            let when = opened.nextAttempt
-            if (when - Date.now() < 65000) when = Date.now() + 65000
-            try {
-                await chrome.alarms.create('nextAttempt_' + project.key, { when })
-            } catch (error) {
-                console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
-            }
-        }
-    }
 
     let silentVoteMode = false
     if (project.rating === 'Custom') {
@@ -516,7 +463,6 @@ const webNavigationOnCommittedListener = function (details) {
             let message = chrome.i18n.getMessage('notReadyInject')
             if (project.error === message) return
             console.warn(getProjectPrefix(project, true), message)
-            sendNotification(getProjectPrefix(project, false), message, 'warn', 'openProject_' + project.key)
             project.error = message
             updateValue('projects', project)
         })()
@@ -693,7 +639,6 @@ async function catchTabError(error, project) {
             message += ' Try this solution: https://github.com/Serega007RU/Auto-Vote-Rating/wiki/Problems-with-Opera'
         }
         console.error(getProjectPrefix(project, true), error.message)
-        sendNotification(getProjectPrefix(project, false), error.message, 'error', 'openProject_' + project.key)
         project.error = message
         updateValue('projects', project)
     }
@@ -921,7 +866,6 @@ async function onRuntimeMessage(request, sender, sendResponse) {
             }
         }
         await transaction.objectStore('projects').delete(request.projectDeleted.key)
-        await chrome.alarms.clear(String(request.projectDeleted.key))
         if (nowVoting) {
             checkVote()
             console.log(getProjectPrefix(request.projectDeleted, true), chrome.i18n.getMessage('projectDeleted'))
@@ -958,7 +902,6 @@ async function onRuntimeMessage(request, sender, sendResponse) {
             }
         }
 
-        await chrome.alarms.clear(String(request.projectRestart.key))
         request.projectRestart.time = null
         await updateValue('projects', request.projectRestart)
         console.log(getProjectPrefix(request.projectRestart, true), chrome.i18n.getMessage('projectRestarted'))
@@ -997,7 +940,6 @@ async function onRuntimeMessage(request, sender, sendResponse) {
         }
         if (!(request.captcha && settings.disabledWarnCaptcha)) {
             console.warn(getProjectPrefix(project, true), message)
-            sendNotification(getProjectPrefix(project, false), message, 'warn', 'openTab_' + sender.tab.id)
             project.error = message
         }
         updateValue('projects', project)
@@ -1043,7 +985,6 @@ async function tryCloseTab(tabId, project, attempt) {
         }
         if (!error.message.includes('No tab with id')) {
             console.warn(getProjectPrefix(project, true), error.message)
-            sendNotification(getProjectPrefix(project, false), error.message, 'error', 'openProject_' + project.key)
         }
     }
 }
@@ -1112,151 +1053,17 @@ async function endVote(request, sender, project) {
     project = await db.get('projects', project.key)
 
     //Если усё успешно
-    let sendMessage
     if (request.successfully || request.later != null) {
-        let time = new Date()
-        if (project.rating === 'Custom' || ((project.timeout != null || project.timeoutHour != null) && !Number.isInteger(request.later) && !(project.lastDayMonth && new Date(time.getFullYear(), time.getMonth(), time.getDay() + 1).getMonth() === new Date().getMonth()))) {
-            if (project.timeoutHour != null) {
-                if (project.timeoutMinute == null) project.timeoutMinute = 0
-                if (project.timeoutSecond == null) project.timeoutSecond = 0
-                if (project.timeoutMS == null) project.timeoutMS = 0
 
-                let month = time.getMonth()
-                let date = time.getDate()
-
-                let needCalculateDate = true
-                if (project.timeoutWeek != null) {
-                    // https://stackoverflow.com/a/11789820/11235240
-                    const distance = (project.timeoutWeek + 7 - time.getDay()) % 7
-                    if (distance > 0) {
-                        needCalculateDate = false
-                        date += distance
-                    }
-                } else if (project.timeoutMonth != null) {
-                    if (time.getDate() !== project.timeoutMonth) {
-                        needCalculateDate = false
-                        if (time.getDate() > project.timeoutMonth) month += 1
-                        date = project.timeoutMonth
-                    }
-                }
-                if (needCalculateDate) {
-                    if (time.getHours() > project.timeoutHour || (time.getHours() === project.timeoutHour && time.getMinutes() >= project.timeoutMinute)) {
-                        if (project.timeoutWeek != null) {
-                            date += 7
-                        } else if (project.timeoutMonth != null) {
-                            month += 1
-                            date = project.timeoutMonth
-                        } else {
-                            date += 1
-                        }
-                    }
-                }
-
-                time = new Date(time.getFullYear(), month, date, project.timeoutHour, project.timeoutMinute, project.timeoutSecond, project.timeoutMS)
-            } else {
-                time.setUTCMilliseconds(time.getUTCMilliseconds() + project.timeout)
-            }
-        } else if (request.later && Number.isInteger(request.later)) {
-            let needSetTime = true
-            if (allProjects[project.rating]?.limitedCountVote?.()) {
-                project.countVote = project.countVote + 1
-                if (project.countVote >= project.maxCountVote) {
-                    needSetTime = false
-                    time = new Date(time.getFullYear(), time.getMonth(), time.getDate() + 1, 0, (project.priority ? 0 : 10), 0, 0)
-                }
-            }
-            if (needSetTime) {
-                time = new Date(request.later)
-            }
-        } else {
-            const timeoutRating = allProjects[project.rating]?.timeout?.(project)
-            if (Number.isInteger(request.successfully)) {
-                time = new Date(request.successfully)
-            } else if (!timeoutRating) {
-                //Если нам не известен таймаут, ставим по умолчанию +24 часа
-                time.setUTCDate(time.getUTCDate() + 1)
-            } else if (timeoutRating.week != null) {
-                let date = time.getUTCDate()
-                // https://stackoverflow.com/a/11789820/11235240
-                const distance = (timeoutRating.week + 7 - time.getUTCDay()) % 7
-                if (distance > 0) {
-                    date += distance
-                } else {
-                    if (time.getUTCHours() >= timeoutRating.hour) {
-                        date += 7
-                    }
-                }
-                time = new Date(Date.UTC(time.getUTCFullYear(), time.getUTCMonth(), date, timeoutRating.hour, (project.priority ? 0 : 10), 0, 0))
-            } else if (timeoutRating.month != null) {
-                let month = time.getUTCMonth()
-                let date = time.getUTCDate()
-                if (time.getUTCDate() !== timeoutRating.month) {
-                    if (time.getUTCDate() > timeoutRating.month) month += 1
-                    date = timeoutRating.month
-                } else {
-                    if (time.getUTCHours() >= timeoutRating.hour) {
-                        month += 1
-                        date = timeoutRating.month
-                    }
-                }
-                time = new Date(Date.UTC(time.getUTCFullYear(), month, date, timeoutRating.hour, (project.priority ? 0 : 10), 0, 0))
-            } else if (timeoutRating.hour != null) {
-                //Рейтинги с таймаутом сбрасывающемся раз в день в определённый час
-                let date = time.getUTCHours() >= timeoutRating.hour ? time.getUTCDate() + 1 : time.getUTCDate()
-                time = new Date(Date.UTC(time.getUTCFullYear(), time.getUTCMonth(), date, timeoutRating.hour, (project.priority ? 0 : 10), 0, 0))
-            } else if (timeoutRating.hours != null) {
-                let needSetTime = true
-                //Рейтинги с таймаутом сбрасывающемся через определённый промежуток времени с момента последнего голосования
-                if (allProjects[project.rating]?.limitedCountVote?.()) {
-                    project.countVote = project.countVote + 1
-                    if (project.countVote >= project.maxCountVote) {
-                        needSetTime = false
-                        time = new Date(time.getFullYear(), time.getMonth(), time.getDate() + 1, 0, (project.priority ? 0 : 10), 0, 0)
-                        project.countVote = 0
-                    }
-                }
-                if (needSetTime) {
-                    let hours = time.getHours() + timeoutRating.hours
-                    let minutes = time.getMinutes()
-                    let seconds = time.getSeconds()
-                    let milliseconds = time.getMilliseconds()
-                    if (timeoutRating.minutes != null) minutes += timeoutRating.minutes
-                    // noinspection JSUnresolvedVariable
-                    if (timeoutRating.seconds != null) seconds += timeoutRating.seconds
-                    // noinspection JSUnresolvedVariable
-                    if (timeoutRating.milliseconds != null) milliseconds += timeoutRating.milliseconds
-                    time = new Date(time.getFullYear(), time.getMonth(), time.getDate(), hours, minutes, seconds, milliseconds)
-                }
-            }
-        }
-
-        time = time.getTime()
-        project.time = time
-
-        if (project.randomize) {
-            if (project.randomize.min == null) {
-                project.randomize = {}
-                project.randomize.min = 0
-                project.randomize.max = 43200000
-            }
-            project.time = project.time + Math.floor(Math.random() * (project.randomize.max - project.randomize.min) + project.randomize.min)
-        } else if ((project.rating === 'topcraft.ru' || project.rating === 'topcraft.club' || project.rating === 'mctop.su' || (project.rating === 'minecraftrating.ru' && project.listing === 'projects')) && !project.priority && project.timeoutHour == null) {
-            //Рандомизация по умолчанию (в пределах 5-10 минут) для бедного TopCraft/McTOP который легко ддосится от массового автоматического голосования
-            project.time = project.time + Math.floor(Math.random() * (600000 - 300000) + 300000)
-        }
-
+        // never vote again until the sites are refreshed
+        project.time = Infinity
         delete project.error
         delete project.warn
 
         if (request.successfully) {
             if (typeof request.successfully === 'string') {
                 project.warn = request.successfully
-                sendMessage = chrome.i18n.getMessage('successAutoVoteWarn', request.successfully)
-            } else {
-                sendMessage = chrome.i18n.getMessage('successAutoVote')
             }
-
-            sendNotification(getProjectPrefix(project, false), sendMessage, 'info', 'openProject_' + project.key)
 
             project.stats.successVotes++
             project.stats.monthSuccessVotes++
@@ -1270,19 +1077,13 @@ async function endVote(request, sender, project) {
         } else {
             if (typeof request.later === 'string') {
                 project.warn = request.later
-                sendMessage = chrome.i18n.getMessage('alreadyVotedWarn', request.later)
-            } else {
-                sendMessage = chrome.i18n.getMessage('alreadyVoted')
             }
-
-            sendNotification(getProjectPrefix(project, false), sendMessage, project.warn ? 'warn' : 'info', 'openProject_' + project.key)
 
             project.stats.laterVotes++
 
             generalStats.laterVotes++
             todayStats.laterVotes++
         }
-        console.log(getProjectPrefix(project, true), sendMessage + ', ' + chrome.i18n.getMessage('timeStamp') + ' ' + project.time)
         //Если ошибка
     } else {
         let message
@@ -1303,14 +1104,8 @@ async function endVote(request, sender, project) {
         if (request.incorrectDomain) {
             message += ' Incorrect domain ' + request.incorrectDomain
         }
-        let retryCoolDown = 3600 * 1000 * 2
 
-        sendMessage = message + '. ' + chrome.i18n.getMessage('errorNextVote', (Math.round(retryCoolDown / 1000 / 60 * 100) / 100).toString())
-
-        project.time = Date.now() + retryCoolDown
         project.error = message
-        console.error(getProjectPrefix(project, true), sendMessage + ', ' + chrome.i18n.getMessage('timeStamp') + ' ' + project.time)
-        if (!(request.errorVote && request.errorVote[0].charAt(0) === '5')) sendNotification(getProjectPrefix(project, false), sendMessage, 'error', 'openProject_' + project.key)
 
         project.stats.errorVotes++
 
@@ -1323,27 +1118,6 @@ async function endVote(request, sender, project) {
     await updateValue('projects', project)
 
     console.log('clearing next attempt')
-    await chrome.alarms.clear('nextAttempt_' + project.key)
-    if (project.time != null && project.time > Date.now()) {
-        let create2 = true
-        let when = project.time
-        if (when - Date.now() < 65000) when = Date.now() + 65000
-        const alarms = await chrome.alarms.getAll()
-        for (const alarm of alarms) {
-            // noinspection JSCheckFunctionSignatures
-            if (!isNaN(alarm.name) && alarm.scheduledTime === when) {
-                create2 = false
-                break
-            }
-        }
-        if (create2) {
-            try {
-                await chrome.alarms.create(String(project.key), { when })
-            } catch (error) {
-                console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
-            }
-        }
-    }
 
     async function removeQueue() {
         for (const [tab, value] of openedProjects) {
@@ -1358,19 +1132,6 @@ async function endVote(request, sender, project) {
     setTimeout(() => {
         removeQueue()
     }, timeout)
-
-    // TODO мы не можем быть уверены что setTimeout в Service Worker 100% отработает, поэтому мы на всякий случай создаём chrome.alarm
-    let alarmTimeout = timeout
-    if (alarmTimeout < 65000) alarmTimeout = 65000
-    try {
-        await chrome.alarms.create('checkVote', { when: Date.now() + alarmTimeout })
-    } catch (error) {
-        console.warn(getProjectPrefix(project, true), 'Ошибка при создании chrome.alarms', error.message)
-    }
-}
-
-function sendNotification(title, message, type, notificationId) {
-    // deprecated
 }
 
 async function openOptionsPage() {
@@ -1434,14 +1195,13 @@ async function refreshNow() {
             tryCloseTab(key, value, 0)
         }
         await store.put(openedProjects, 'openedProjects')
-        reloadAllAlarms()
         checkVote()
     }, async () => {
         awaitingEid = true
         chrome.tabs.create({ url: "https://purevanilla.co/vote", active: false });
     }).then(() => {
         console.log('refresh completed')
-    }).error(() => {
+    }).catch(() => {
         console.log('error while refreshing')
     })
 }
