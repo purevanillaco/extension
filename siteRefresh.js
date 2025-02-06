@@ -13,17 +13,11 @@ async function refreshSites(callback, retrieveEid) {
     }
 
     console.log('refreshSites', eid)
-    let next = 3600 * 1000 * 2
+    let next = 1000 * 3600
     try {
-        let cursor = await db.transaction('projects', 'readwrite').store.index('rating').openCursor()
-        while (cursor) {
-            await cursor.delete()
-            cursor = await cursor.continue()
-        }
         const req = await fetch('https://api.beta.serverbench.io/community/hn2qqSZ30ebQWWd_7uso9/listing/display', {
             headers: {
                 'Content-Type': 'application/json',
-                'username': 'quiquelhappy'
             },
             method: 'POST',
             body: JSON.stringify({
@@ -31,35 +25,64 @@ async function refreshSites(callback, retrieveEid) {
             })
         })
         const data = await req.json()
+        const futureJobs = []
         for (const siteDisplay of data.sites) {
-            if (siteDisplay.secondary) continue;
+            if (siteDisplay.secondary && data.primaryCompleted == null) continue;
             const nextVote = siteDisplay.next ? new Date(siteDisplay.next) : null
             if (nextVote) {
+                // retry voting on future-expiring vote
                 const relative = nextVote - Date.now()
                 if (relative > 0 && relative < next) {
                     next = relative
                 }
             }
-            await buildProject(
+            const domain = siteDisplay.site.site.domain
+            if (domain == null) {
+                console.log('domain is null', siteDisplay.site.url)
+                continue
+            }
+            if (allProjects[domain.toLowerCase()] == null) {
+                console.log('no parser for', domain)
+                continue
+            }
+            if (nextVote && nextVote.getTime() > Date.now()) {
+                console.log('already voted skipping', siteDisplay.site.url, nextVote)
+                continue;
+            }
+            futureJobs.push(buildProject(
                 siteDisplay.site.url,
                 siteDisplay.last ? new Date(siteDisplay.last) : null,
                 nextVote,
                 data.member.name
-            )
+            ))
+        }
+        // delete all existing data, it will be refreshed now
+        let cursor = await db.transaction('projects', 'readwrite').store.index('rating').openCursor()
+        while (cursor) {
+            await cursor.delete()
+            cursor = await cursor.continue()
+        }
+        console.log('deleted all')
+        console.log('pending jobs: ' + futureJobs.length)
+        if (futureJobs.length > 0) {
+            await Promise.all(futureJobs)
+            console.log('voting in background...')
+            callback().then(() => {
+                console.log('finished scheduled job')
+            }).catch((err) => {
+                console.error('error on scheduled job', err)
+            })
         }
         if (data.primaryNext) {
+            // if next primaries are sooner, refresh on that
             const nextVote = new Date(data.primaryNext).getTime() - Date.now()
             if (nextVote > 0 && nextVote < next) {
                 next = nextVote
             }
         }
-        try {
-            await callback()
-        } catch (error) {
-            console.error(error)
-        }
     } catch (error) {
-        console.error(error)
+        // retry after 5 minutes on error
+        console.log("early refresh due to error", error)
         next = 1000 * 60 * 5
     }
     console.log('next refresh: ', new Date(Date.now() + next))
@@ -131,7 +154,7 @@ async function buildProject(url, lastVote, nextVote, username) {
 async function addProject(project, element) {
     let found = await db.countFromIndex('projects', 'rating, id', [project.rating, project.id])
     if (found > 0) {
-        return
+        await db.delete('projects', project.id);
     }
 
     await addProjectList(project)

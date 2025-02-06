@@ -122,8 +122,6 @@ async function initializeConfig(background, version) {
             await db.put('other', openedProjects, 'openedProjects')
         }
 
-        // noinspection ES6MissingAwait
-        checkVote()
     } else {
         if (!openedProjects.size) {
             updateListeners(false)

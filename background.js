@@ -9,16 +9,12 @@ importScripts('siteRefresh.js')
 
 const retryCooldown = 3600 * 1000 * 2
 
-// TODO отложенный importScripts пока не работают, подробнее https://bugs.chromium.org/p/chromium/issues/detail?id=1198822
+// import voting scripts after install
 self.addEventListener('install', () => {
     importScripts('libs/linkedom.js')
     importScripts('scripts/mcserver-list.eu_silentvote.js', 'scripts/misterlauncher.org_silentvote.js', 'scripts/serverpact.com_silentvote.js', 'scripts/genshindrop.com_silentvote.js')
 })
 
-//Текущие fetch запросы
-// noinspection ES6ConvertVarToLetConst
-// var fetchProjects = new Map()
-//ID группы вкладок в которой сейчас открыты вкладки расширения
 let groupId
 //Если этот браузер не поддерживает группировку вкладок
 let notSupportedGroupTabs = false
@@ -37,11 +33,9 @@ initializeFunc.finally(() => initializeFunc.done = true)
 //Проверка: нужно ли голосовать, сверяет время текущее с временем из конфига
 async function checkVote() {
     console.log('checkvote')
-
-    await initializeFunc
-
     // noinspection JSUnresolvedReference
     if (!settings.operaAttention2 && (navigator?.userAgentData?.brands?.[0]?.brand === 'Opera' || (!!self.opr && !!opr.addons) || !!self.opera || navigator.userAgent.indexOf(' OPR/') >= 0)) {
+        console.log('eing?')
         return
     }
 
@@ -53,6 +47,7 @@ async function checkVote() {
             db.put('other', onLine, 'onLine')
         } else {
             setTimeout(async () => {
+                console.log('eing??')
                 await checkVote()
             }, 60 * 1000 + 50)
             return
@@ -89,12 +84,6 @@ async function checkVote() {
         }
     }
 }
-
-chrome.idle.onStateChanged.addListener(async function (newState) {
-    if (newState === 'active') {
-        checkVote()
-    }
-})
 
 let promises = []
 async function checkOpen(project, transaction) {
@@ -160,24 +149,6 @@ async function checkOpen(project, transaction) {
     openedProjects.set('start_' + project.key, opened)
     db.put('other', openedProjects, 'openedProjects')
 
-    if (settings.debug) console.log(getProjectPrefix(project, true), 'пред запуск')
-
-    if (project.rating === 'monitoringminecraft.ru') {
-        promises.push(clearMonitoringMinecraftCookies())
-        async function clearMonitoringMinecraftCookies() {
-            let url
-            if (project.rating === 'monitoringminecraft.ru') {
-                url = '.monitoringminecraft.ru'
-            }
-            let cookies = await chrome.cookies.getAll({ domain: url })
-            if (settings.debug) console.log(chrome.i18n.getMessage('deletingCookies', url))
-            for (let i = 0; i < cookies.length; i++) {
-                if (cookies[i].domain.charAt(0) === '.') cookies[i].domain = cookies[i].domain.substring(1, cookies[i].domain.length)
-                await chrome.cookies.remove({ url: 'https://' + cookies[i].domain + cookies[i].path, name: cookies[i].name })
-            }
-        }
-    }
-
     // noinspection JSIgnoredPromiseFromCall
     newWindow(project, opened)
 }
@@ -222,57 +193,44 @@ async function newWindow(project, opened) {
     await db.put('other', todayStats, 'todayStats')
     await updateValue('projects', project)
 
-    let silentVoteMode = false
-    if (project.rating === 'Custom') {
-        silentVoteMode = true
-    } else if (!project.emulateMode && allProjects[project.rating].silentVote?.(project)) {
-        silentVoteMode = true
-    }
-    if (silentVoteMode) {
-        openedProjects.set('background_' + project.key, opened)
-        openedProjects.delete('start_' + project.key)
-        db.put('other', openedProjects, 'openedProjects')
-        silentVote(project)
-    } else {
-        let result = await promiseWindow
-        if (result === false) return
-        promiseWindow = checkWindow(project)
-        result = await promiseWindow
-        if (result === false) return
+    let windowResult = await promiseWindow
+    if (windowResult === false) return
+    promiseWindow = checkWindow(project)
+    windowResult = await promiseWindow
+    if (windowResult === false) return
 
-        const url = allProjects[project.rating].voteURL(project)
+    const url = allProjects[project.rating].voteURL(project)
 
-        let tab = await tryOpenTab({ url, active: settings.disabledFocusedTab || Boolean(allProjects[project.rating].focusedTab?.(project)) }, project, 0)
-        if (tab == null) return
-        openedProjects.set(tab.id, opened)
-        openedProjects.delete('start_' + project.key)
-        db.put('other', openedProjects, 'openedProjects')
+    let tab = await tryOpenTab({ url, active: settings.disabledFocusedTab || Boolean(allProjects[project.rating].focusedTab?.(project)) }, project, 0)
+    if (tab == null) return
+    openedProjects.set(tab.id, opened)
+    openedProjects.delete('start_' + project.key)
+    db.put('other', openedProjects, 'openedProjects')
 
-        setTimeout(async () => {
-            try {
-                groupTabs(tab)
-            } catch (error) {
-                console.log(error)
-            }
-        }, 1000 * 30);
+    setTimeout(async () => {
+        try {
+            groupTabs(tab)
+        } catch (error) {
+            console.log(error)
+        }
+    }, 1000 * 30);
 
-        setTimeout(async () => {
-            try {
-                const tabInfo = await chrome.tabs.query({ active: true, currentWindow: true });
-                if (tab.id !== tabInfo[0].id) {
-                    try {
-                        await chrome.tabs.remove(tab.id);
-                    } catch (error) {
+    setTimeout(async () => {
+        try {
+            const tabInfo = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab.id !== tabInfo[0].id) {
+                try {
+                    await chrome.tabs.remove(tab.id);
+                } catch (error) {
 
-                    }
-                } else {
-                    console.log('Tab is focused, not removing');
                 }
-            } catch (error) {
-
+            } else {
+                console.log('Tab is focused, not removing');
             }
-        }, 1000 * 60)
-    }
+        } catch (error) {
+
+        }
+    }, 1000 * 60)
 }
 
 let managingGroup = false;
@@ -768,6 +726,7 @@ async function handlePurevanillaMessage(request, sender, sendResponse) {
 
     console.log("Received valid message from purevanilla.co:", request.text);
     if (awaitingEid) {
+        awaitingEid = false
         const transaction = pvDb.transaction("user", "readwrite");
         const store = transaction.objectStore("user");
         const { eid } = JSON.parse(request.text)
@@ -1051,12 +1010,12 @@ async function endVote(request, sender, project) {
 
     // Повторно достаём project так как за время отправки отчёта или использования удалённого кода он мог измениться
     project = await db.get('projects', project.key)
+    project.time = Infinity
 
     //Если усё успешно
     if (request.successfully || request.later != null) {
 
         // never vote again until the sites are refreshed
-        project.time = Infinity
         delete project.error
         delete project.warn
 
@@ -1085,32 +1044,6 @@ async function endVote(request, sender, project) {
             todayStats.laterVotes++
         }
         //Если ошибка
-    } else {
-        let message
-        if (!request.message) {
-            const name = Object.keys(request)[0]
-            if (Object.values(request)[0] === true) {
-                message = chrome.i18n.getMessage(name)
-            } else {
-                message = chrome.i18n.getMessage(name, Object.values(request)[0])
-            }
-            if (request.usedTranslator && name !== 'usedTranslator') {
-                message += ' ' + chrome.i18n.getMessage('usedTranslator')
-            }
-        } else {
-            message = chrome.i18n.getMessage('siteError', request.message)
-        }
-        if (message.length === 0) message = chrome.i18n.getMessage('emptyError')
-        if (request.incorrectDomain) {
-            message += ' Incorrect domain ' + request.incorrectDomain
-        }
-
-        project.error = message
-
-        project.stats.errorVotes++
-
-        generalStats.errorVotes++
-        todayStats.errorVotes++
     }
 
     await db.put('other', generalStats, 'generalStats')
@@ -1185,7 +1118,7 @@ async function updateValue(objStore, value) {
 let awaitingEid = false
 async function refreshNow() {
     console.log('scheduling refresh')
-    refreshSites(async () => {
+   await refreshSites(async () => {
         const store = db.transaction('other', 'readwrite').store
         settings = await store.get('settings')
         generalStats = await store.get('generalStats')
@@ -1195,26 +1128,52 @@ async function refreshNow() {
             tryCloseTab(key, value, 0)
         }
         await store.put(openedProjects, 'openedProjects')
-        checkVote()
+        await checkVote()
     }, async () => {
         awaitingEid = true
         chrome.tabs.create({ url: "https://purevanilla.co/vote", active: false });
-    }).then(() => {
-        console.log('refresh completed')
-    }).catch(() => {
-        console.log('error while refreshing')
     })
 }
-chrome.runtime.onInstalled.addListener(async function (details) {
+
+async function shutdown() {
+    try {
+        const transaction = db.transaction('projects', 'readonly');
+        const store = transaction.objectStore('projects');
+        const projects = await store.getAll(); // Obtener todos los proyectos de una vez
+        
+        let closeJobs = [];
+        
+        for (const project of projects) {
+            const domain = project.rating;
+            console.log('closing', domain);
+            
+            // Cerrar todas las pestañas de ese dominio
+            let tabs = await chrome.tabs.query({ url: `*://${domain}/*` });
+            for (let tab of tabs) {
+                closeJobs.push(chrome.tabs.remove(tab.id));
+            }
+        }
+        
+        await Promise.all(closeJobs);
+
+        if (closeJobs.length > 0) {
+            await new Promise(resolve => setTimeout(resolve, 5 * 1000));
+        }
+    } catch (error) {
+        console.log('shutdown err', error);
+    }
+}
+
+
+async function bootstrap() {
     await initializeFunc
-    // noinspection JSUnresolvedReference
-    if (!settings.operaAttention2 && (navigator?.userAgentData?.brands?.[0]?.brand === 'Opera' || (!!self.opr && !!opr.addons) || !!self.opera || navigator.userAgent.indexOf(' OPR/') >= 0)) {
-        chrome.runtime.openOptionsPage()
-        return
-    }
-    if (details.reason === 'install') {
-        await openOptionsPage()
-        chrome.runtime.sendMessage({ installed: true })
-    }
+    // close all open tabs
+    console.log('1')
+    await shutdown()
+    console.log('2')
     await refreshNow()
-})
+    console.log('3')
+}
+
+chrome.runtime.onInstalled.addListener(() => bootstrap())
+chrome.runtime.onStartup.addListener(() => bootstrap())
