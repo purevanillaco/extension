@@ -16,11 +16,9 @@
 		"background",
 		"webNavigation",
 		"webRequest",
-		"alarms",
 		"unlimitedStorage",
 		"scripting",
-		"tabGroups",
-		"idle"
+		"tabGroups"
 	],
 	"optional_permissions": [
 		"cookies"
