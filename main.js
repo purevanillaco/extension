@@ -327,7 +327,6 @@ async function upgrade(db, oldVersion, newVersion, transaction) {
             ['MinecraftServersOrg', 'minecraftservers.org'],
             ['ServeurPrive', 'serveur-prive.net'],
             ['PlanetMinecraft', 'planetminecraft.com'],
-            ['TopG', 'topg.org'],
             ['ListForge', 'listforge.net'],
             ['MinecraftServerList', 'minecraft-server-list.com'],
             ['ServerPact', 'serverpact.com'],

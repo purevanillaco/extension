@@ -127,22 +127,6 @@ var allProjects = {
         parseURL: (url) => ({id: url.pathname.split('/')[2]}),
         timeout: () => ({hour: 5})
     },
-    'topg.org': {
-        pageURL: (project) => 'https://topg.org/' + project.game + '/' + project.id,
-        voteURL: (project) => 'https://topg.org/' + project.game + '/' + project.id,
-        projectName: (doc) => doc.querySelector('div.sheader').textContent,
-        exampleURL: () => ['https://topg.org/minecraft-servers/', 'server-405637', ''],
-        parseURL: (url) => ({ game: url.pathname.split('/')[1], id: url.pathname.split('/')[2]}),
-        timeout: () => ({hours: 12}),
-        exampleURLGame: () => ['https://topg.org/', 'minecraft-servers', '/server-405637'],
-        gameList: () => new Map([
-            ['minecraft-servers', 'Minecraft'],
-            ['cs-servers', 'Counter Strike: 1.6'],
-            ['mu-private-servers', 'Mu Online'],
-            ['wow-private-servers', 'World of Warcraft'],
-            ['runescape-private-servers', 'Runescape']
-        ])
-    },
     'listforge.net': {
         pageURL: (project) => 'https://' + project.game + '/server/' + project.id + '/vote/',
         voteURL: (project) => 'https://' + project.game + '/server/' + project.id + '/vote/' + (project.addition != null ? project.addition : ''),
