@@ -1177,3 +1177,9 @@ async function bootstrap() {
 
 chrome.runtime.onInstalled.addListener(() => bootstrap())
 chrome.runtime.onStartup.addListener(() => bootstrap())
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === "siteRefresh") {
+        await refreshNow()
+    }
+});

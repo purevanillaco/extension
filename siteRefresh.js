@@ -1,9 +1,4 @@
-let existingTimeout = null
 async function refreshSites(callback, retrieveEid) {
-    if (existingTimeout) {
-        clearTimeout(existingTimeout)
-    }
-
     const transaction = await pvDb.transaction("user", "readonly");
     const store = await transaction.objectStore("user");
     const eid = (await store.get('eid'))?.value
@@ -86,10 +81,7 @@ async function refreshSites(callback, retrieveEid) {
         next = 1000 * 60 * 5
     }
     console.log('next refresh: ', new Date(Date.now() + next))
-    existingTimeout = setTimeout(async () => {
-        await refreshSites(callback, retrieveEid)
-    }, next)
-    firstRequest = false
+    chrome.alarms.create("siteRefresh", { delayInMinutes: Math.max(Math.trunc(next / (60 * 1000)), 1) });
 }
 
 
